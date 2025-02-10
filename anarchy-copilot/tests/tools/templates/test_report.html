@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Anarchy Copilot - Test Report</title>
+    <link rel="stylesheet" href="styles/report.css">
+</head>
+<body>
+    <div class="header">
+        <h1>Test Execution Report</h1>
+        <p class="timestamp">Generated on: {{ report_date }}</p>
+        <p>Environment: {{ summary.environment | tojson }}</p>
+    </div>
+
+    <div class="summary">
+        <div class="summary-box">
+            <h3>Total Statistics</h3>
+            <p><span class="stat-label">Total Tests:</span> {{ summary.total_stats.total_tests }}</p>
+            <p><span class="stat-label">Passed:</span> {{ summary.total_stats.passed }}</p>
+            <p><span class="stat-label">Failed:</span> {{ summary.total_stats.failed }}</p>
+            <p><span class="stat-label">Skipped:</span> {{ summary.total_stats.skipped }}</p>
+            <div class="progress">
+                {% set success_rate = summary.total_stats.passed / summary.total_stats.total_tests * 100 %}
+                <div class="progress-bar {% if success_rate > 90 %}success{% elif success_rate > 70 %}warning{% else %}danger{% endif %}"
+                     style="width: {{ success_rate }}%">
+                    {{ "%.1f"|format(success_rate) }}%
+                </div>
+            </div>
+        </div>
+        <div class="summary-box">
+            <h3>Coverage Summary</h3>
+            <p><span class="stat-label">Overall Coverage:</span> {{ "%.1f"|format(summary.total_stats.coverage) }}%</p>
+            <div class="progress">
+                <div class="progress-bar {% if summary.total_stats.coverage > 80 %}success{% elif summary.total_stats.coverage > 60 %}warning{% else %}danger{% endif %}"
+                     style="width: {{ summary.total_stats.coverage }}%">
+                    {{ "%.1f"|format(summary.total_stats.coverage) }}%
+                </div>
+            </div>
+        </div>
+        <div class="summary-box">
+            <h3>Execution Time</h3>
+            <p><span class="stat-label">Total Duration:</span> {{ "%.2f"|format(summary.total_stats.duration) }}s</p>
+        </div>
+    </div>
+
+    <h2>Module Details</h2>
+    {% for module in summary.modules %}
+    <div class="module">
+        <h3>{{ module.name }}</h3>
+        <div class="module-content">
+            <table>
+                <tr>
+                    <th>Total Tests</th>
+                    <th>Passed</th>
+                    <th>Failed</th>
+                    <th>Skipped</th>
+                    <th>Coverage</th>
+                    <th>Duration</th>
+                </tr>
+                <tr>
+                    <td>{{ module.tests.total_tests }}</td>
+                    <td>{{ module.tests.passed }}</td>
+                    <td>{{ module.tests.failed }}</td>
+                    <td>{{ module.tests.skipped }}</td>
+                    <td>
+                        <span class="coverage-badge {% if module.tests.coverage > 80 %}coverage-high{% elif module.tests.coverage > 60 %}coverage-medium{% else %}coverage-low{% endif %}">
+                            {{ "%.1f"|format(module.tests.coverage) }}%
+                        </span>
+                    </td>
+                    <td>{{ "%.2f"|format(module.tests.duration) }}s</td>
+                </tr>
+            </table>
+
+            <h4>Coverage Details</h4>
+            <table>
+                <tr>
+                    <th>File</th>
+                    <th>Coverage</th>
+                </tr>
+                {% for file, coverage in module.coverage.items() %}
+                <tr>
+                    <td>{{ file }}</td>
+                    <td>
+                        <span class="coverage-badge {% if coverage > 80 %}coverage-high{% elif coverage > 60 %}coverage-medium{% else %}coverage-low{% endif %}">
+                            {{ "%.1f"|format(coverage) }}%
+                        </span>
+                    </td>
+                </tr>
+                {% endfor %}
+            </table>
+
+            <p class="timestamp">Last Run: {{ module.last_run }}</p>
+        </div>
+    </div>
+    {% endfor %}
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Add module collapsing
+            const modules = document.querySelectorAll('.module h3');
+            modules.forEach(header => {
+                const content = header.nextElementSibling;
+                content.style.display = 'none';  // Initially collapsed
+
+                header.addEventListener('click', () => {
+                    const isVisible = content.style.display === 'block';
+                    content.style.display = isVisible ? 'none' : 'block';
+                    header.classList.toggle('expanded', !isVisible);
+                });
+            });
+
+            // Expand modules with failures
+            document.querySelectorAll('.module').forEach(module => {
+                const failed = parseInt(module.querySelector('td:nth-child(3)').textContent);
+                if (failed > 0) {
+                    const content = module.querySelector('.module-content');
+                    content.style.display = 'block';
+                    module.querySelector('h3').classList.add('expanded');
+                }
+            });
+        });
+    </script>
+</body>
+</html>

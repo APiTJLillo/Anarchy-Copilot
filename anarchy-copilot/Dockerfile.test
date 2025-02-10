@@ -1,0 +1,48 @@
+# Test environment Dockerfile
+FROM python:3.10-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    wget \
+    unzip \
+    git \
+    make \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Nuclei
+RUN wget https://github.com/projectdiscovery/nuclei/releases/download/v2.9.0/nuclei_2.9.0_linux_amd64.zip \
+    && unzip nuclei_2.9.0_linux_amd64.zip \
+    && mv nuclei /usr/local/bin/ \
+    && rm nuclei_2.9.0_linux_amd64.zip \
+    && nuclei -update-templates
+
+WORKDIR /app
+
+# Install Python dependencies
+COPY requirements*.txt ./
+COPY tests/requirements-test.txt ./tests/
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir -r tests/requirements-test.txt
+
+# Copy source code
+COPY . .
+
+# Install package in development mode
+RUN pip install -e .[dev]
+
+# Set environment variables
+ENV PYTHONPATH=/app
+ENV PYTEST_ADDOPTS="-v --asyncio-mode=auto"
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+
+# Create directory for test artifacts
+RUN mkdir -p /app/test-results
+
+# Default command to run tests
+CMD ["pytest", "tests/", "-v", "--junitxml=/app/test-results/junit.xml", "--cov=anarchy_copilot", "--cov-report=xml:/app/test-results/coverage.xml"]
+
+# Health check to verify nuclei installation
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD nuclei -version || exit 1

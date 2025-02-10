@@ -1,0 +1,86 @@
+{
+  "scan_id": "example-scan-123",
+  "timestamp": "2025-02-10T12:00:00Z",
+  "findings": [
+    {
+      "id": "finding-1",
+      "type": "vulnerability",
+      "name": "Example XSS",
+      "severity": "high",
+      "target": "http://example.com/page",
+      "details": {
+        "description": "Example XSS vulnerability",
+        "evidence": "<script>alert(1)</script>",
+        "cwe": "CWE-79",
+        "cvss": 7.5,
+        "references": [
+          "https://owasp.org/www-community/attacks/xss/",
+          "https://cwe.mitre.org/data/definitions/79.html"
+        ],
+        "remediation": "Properly encode all user input before rendering in HTML context"
+      }
+    },
+    {
+      "id": "finding-2",
+      "type": "vulnerability",
+      "name": "Example SQLi",
+      "severity": "critical",
+      "target": "http://example.com/api",
+      "details": {
+        "description": "Example SQL injection vulnerability",
+        "evidence": "1' OR '1'='1",
+        "cwe": "CWE-89",
+        "cvss": 9.8,
+        "references": [
+          "https://owasp.org/www-community/attacks/SQL_Injection",
+          "https://cwe.mitre.org/data/definitions/89.html"
+        ],
+        "remediation": "Use parameterized queries and input validation"
+      }
+    },
+    {
+      "id": "finding-3",
+      "type": "vulnerability",
+      "name": "Example Path Traversal",
+      "severity": "medium",
+      "target": "http://example.com/download",
+      "details": {
+        "description": "Example path traversal vulnerability",
+        "evidence": "../../etc/passwd",
+        "cwe": "CWE-22",
+        "cvss": 5.5,
+        "references": [
+          "https://owasp.org/www-community/attacks/Path_Traversal",
+          "https://cwe.mitre.org/data/definitions/22.html"
+        ],
+        "remediation": "Validate and sanitize file paths, use chroot when possible"
+      }
+    }
+  ],
+  "statistics": {
+    "total_findings": 3,
+    "severity_counts": {
+      "critical": 1,
+      "high": 1,
+      "medium": 1,
+      "low": 0,
+      "info": 0
+    },
+    "type_counts": {
+      "vulnerability": 3
+    }
+  },
+  "metadata": {
+    "scan_duration": 120,
+    "templates_used": [
+      "xss",
+      "sqli",
+      "path_traversal"
+    ],
+    "scan_config": {
+      "name": "example_scan",
+      "concurrency": 5,
+      "timeout": 30
+    }
+  }
+}

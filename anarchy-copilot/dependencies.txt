@@ -1,0 +1,11 @@
+# System Packages (name:version)
+golang-go:1.16.0      # Required for installing Go-based recon tools
+python3-pip:21.0.0    # Required for Python package management
+python3-venv:3.8.0    # Required for Python virtual environments
+git:2.0.0            # Required for cloning repositories
+
+# Go Tool Repositories (name|url|type|path)
+amass|https://github.com/owasp-amass/amass.git|go|cmd/amass         # OWASP Amass for subdomain enumeration
+subfinder|https://github.com/projectdiscovery/subfinder.git|go|cmd/subfinder  # Subfinder for passive subdomain discovery
+assetfinder|https://github.com/tomnomnom/assetfinder.git|go|main    # Assetfinder for finding domains and subdomains
+dnsx|https://github.com/projectdiscovery/dnsx.git|go|cmd/dnsx       # DNSx for DNS toolkit

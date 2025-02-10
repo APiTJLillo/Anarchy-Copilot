@@ -1,0 +1,47 @@
+# Example scan configuration for testing
+name: example_scan
+description: Example scan configuration for testing
+version: 1.0
+
+# Target settings
+targets:
+  - url: http://example.com
+    scan_type: full
+  - url: https://test.example.com
+    scan_type: basic
+  - domain: example.org
+    scan_type: passive
+
+# Scan settings
+scan:
+  concurrency: 5
+  timeout: 30
+  templates:
+    - xss
+    - sqli
+    - path_traversal
+  options:
+    follow_redirects: true
+    max_redirects: 3
+    rate_limit: 10
+
+# Output settings
+output:
+  format: json
+  directory: results
+  report_name: example_scan_report
+  levels:
+    - info
+    - warning
+    - critical
+
+# Advanced settings
+advanced:
+  retry:
+    max_attempts: 3
+    delay: 1
+  proxy:
+    enabled: false
+    url: ""
+  headers:
+    User-Agent: "AnarchyCopilot-Test/1.0"

@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    volumes:
+      - .:/app
+      - test-cache:/root/.cache
+    environment:
+      - PYTHONPATH=/app
+      - PYTEST_ADDOPTS="-v --asyncio-mode=auto"
+    command: pytest tests/ -v
+
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - .:/app
+      - ~/.nuclei:/root/.nuclei
+      - dev-cache:/root/.cache
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONPATH=/app
+      - NUCLEI_TEMPLATES=/root/.nuclei/templates
+    command: >
+      /bin/sh -c "
+        pip install -e .[dev] &&
+        pip install -r tests/requirements-test.txt &&
+        python -m uvicorn anarchy_copilot.api:app --host 0.0.0.0 --port 8000 --reload
+      "
+
+  nuclei:
+    image: projectdiscovery/nuclei:v2.9.0
+    volumes:
+      - ~/.nuclei:/root/.nuclei
+      - ./tests/data/nuclei_templates:/templates
+    command: -update-templates
+
+  validate:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    volumes:
+      - .:/app
+      - ~/.nuclei:/root/.nuclei
+    environment:
+      - PYTHONPATH=/app
+    command: python -m tests.tools.validate_templates
+
+volumes:
+  test-cache:
+  dev-cache:

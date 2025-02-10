@@ -1,0 +1,14 @@
+# This empty file marks this package as supporting type hints (PEP 561)
+
+# Type information included for:
+# - Core vulnerability scanning functionality
+# - AI-driven payload generation
+# - Fuzzing engine components
+# - Results and payloads models
+# - Vulnerability management interface
+
+# All interfaces are fully typed to ensure type safety during:
+# - Scanner integration
+# - Payload generation
+# - Result processing
+# - False positive analysis

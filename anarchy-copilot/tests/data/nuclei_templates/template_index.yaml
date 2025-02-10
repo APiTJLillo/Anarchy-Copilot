@@ -1,0 +1,99 @@
+# Anarchy Copilot Test Templates Index
+
+templates:
+  - id: test-xss
+    type: vulnerability
+    category: xss
+    confidence: high
+    info:
+      name: Test XSS Template
+      severity: medium
+      tags: [xss, test]
+
+  - id: test-sqli
+    type: vulnerability
+    category: sql-injection
+    confidence: high
+    info:
+      name: Test SQL Injection Template
+      severity: high
+      tags: [sqli, test]
+
+  - id: test-path-traversal
+    type: vulnerability
+    category: lfi
+    confidence: high
+    info:
+      name: Test Path Traversal Template
+      severity: high
+      tags: [lfi, path-traversal, test]
+
+template_groups:
+  injection:
+    - test-xss
+    - test-sqli
+    
+  file_access:
+    - test-path-traversal
+
+test_scenarios:
+  basic:
+    description: Basic vulnerability testing
+    templates: [test-xss, test-sqli, test-path-traversal]
+
+  web_only:
+    description: Web-focused testing
+    templates: [test-xss]
+
+  injection_only:
+    description: Injection vulnerability testing
+    templates: [test-xss, test-sqli]
+
+template_metadata:
+  author: Anarchy Copilot Team
+  framework_version: "1.0"
+  description: Test templates for vulnerability scanning tests
+  tags:
+    - test
+    - vulnerability
+    - security
+  requirements:
+    nuclei_version: ">=2.8.0"
+    go_version: ">=1.17"
+  dependencies:
+    - type: tool
+      name: nuclei
+      version: ">=2.8.0"
+    - type: library
+      name: go-yaml
+      version: ">=2.0.0"
+
+validation:
+  # Command to validate templates
+  command: "nuclei -validate -t {template_path}"
+  # Expected output patterns for valid templates
+  success_patterns:
+    - "Template validated successfully"
+    - "No errors found"
+  # Common error patterns to check
+  error_patterns:
+    - "failed to validate"
+    - "template format error"
+    - "invalid matcher type"
+
+usage:
+  # Example command to run all test templates
+  run_all: |
+    nuclei -t tests/data/nuclei_templates/ -target {target}
+  
+  # Example command to run specific template group
+  run_group: |
+    nuclei -t tests/data/nuclei_templates/{group}/ -target {target}
+  
+  # Example command to run with custom configuration
+  run_custom: |
+    nuclei -t tests/data/nuclei_templates/ -target {target} \
+      -rate-limit 10 \
+      -timeout 5 \
+      -max-redirects 3 \
+      -severity {severity}

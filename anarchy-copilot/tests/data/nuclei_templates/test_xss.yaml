@@ -1,0 +1,44 @@
+id: test-xss
+info:
+  name: Test XSS Template
+  author: Anarchy Copilot Team
+  severity: medium
+  description: Test template for XSS detection
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/search"
+      - "{{BaseURL}}/test"
+    
+    payloads:
+      injection:
+        - '<script>alert(1)</script>'
+        - '"><svg onload=alert(1)>'
+        - 'javascript:alert(1)'
+
+    headers:
+      User-Agent: Mozilla/5.0 AnarchyCopilot/Test
+
+    redirects: true
+    max-redirects: 3
+    
+    matchers-condition: and
+    matchers:
+      - type: word
+        words:
+          - "{{injection}}"
+        case-insensitive: true
+        part: response
+      - type: word
+        words:
+          - "text/html"
+        part: header
+
+    extractors:
+      - type: regex
+        name: reflected_xss
+        regex:
+          - "<script>[^<]*alert\(1\)[^<]*</script>"
+          - "javascript:alert\(1\)"
+        group: 1

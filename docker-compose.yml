@@ -1,24 +1,102 @@
 version: '3.8'
 
 services:
-  backend:
+  test:
     build:
-      context: ./anarchy-copilot
-      dockerfile: Dockerfile.backend
-    ports:
-      - "8000:8000"
+      context: .
+      dockerfile: Dockerfile.test
     volumes:
-      - ./anarchy_copilot.db:/app/anarchy_copilot.db
+      - .:/app
+      - test-cache:/root/.cache
     environment:
-      - PYTHONUNBUFFERED=1
+      - PYTHONPATH=/app
+      - PYTEST_ADDOPTS="-v"
+    command: pytest tests/ -v
+
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - .:/app
+      - ~/.nuclei:/root/.nuclei
+      - dev-cache:/root/.cache
+    ports:
+      - "8000:8000"    # API
+    environment:
+      - PYTHONPATH=/app
+      - NUCLEI_TEMPLATES=/root/.nuclei/templates
+    command: python -m uvicorn anarchy_copilot.api:app --host 0.0.0.0 --port 8000 --reload
+
+  proxy:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - .:/app
+      - proxy-certs:/app/certs
+      - proxy-data:/app/data
+    ports:
+      - "8080:8080"  # Proxy
+    environment:
+      - PYTHONPATH=/app
+      - PROXY_HOST=0.0.0.0
+      - PROXY_PORT=8080
+      - CA_CERT_PATH=/app/certs/ca.crt
+      - CA_KEY_PATH=/app/certs/ca.key
+    command: >
+      sh -c "
+        mkdir -p /app/certs /app/data &&
+        python -m examples.proxy_example
+      "
 
   frontend:
     build:
-      context: ./anarchy-copilot/frontend
+      context: ./frontend
       dockerfile: Dockerfile.frontend
+    volumes:
+      - ./frontend:/app
+      - frontend-node-modules:/app/node_modules
     ports:
       - "3000:3000"
-    depends_on:
-      - backend
     environment:
-      - REACT_APP_API_URL=http://backend:8000
+      - NODE_ENV=development
+      - REACT_APP_API_URL=http://localhost:8000
+      - REACT_APP_PROXY_URL=http://localhost:8080
+      - WDS_SOCKET_PORT=3000
+    depends_on:
+      - dev
+      - proxy
+
+  nuclei:
+    image: projectdiscovery/nuclei:v2.9.0
+    volumes:
+      - ~/.nuclei:/root/.nuclei
+      - ./tests/data/nuclei_templates:/templates
+    command: -update-templates
+
+  validate:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    volumes:
+      - .:/app
+      - ~/.nuclei:/root/.nuclei
+      - validate-cache:/root/.cache
+    environment:
+      - PYTHONPATH=/app
+    command: python -m tests.tools.validate_templates
+
+volumes:
+  test-cache:
+    name: anarchy-copilot_test-cache
+  dev-cache:
+    name: anarchy-copilot_dev-cache
+  proxy-certs:
+    name: anarchy-copilot_proxy-certs
+  proxy-data:
+    name: anarchy-copilot_proxy-data
+  validate-cache:
+    name: anarchy-copilot_validate-cache
+  frontend-node-modules:
+    name: anarchy-copilot_frontend-node-modules

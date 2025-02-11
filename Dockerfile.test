@@ -1,0 +1,44 @@
+FROM python:3.10-slim
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    wget \
+    unzip \
+    git \
+    make \
+    gcc \
+    nmap \
+    chromium \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install nuclei
+RUN wget https://github.com/projectdiscovery/nuclei/releases/download/v2.9.0/nuclei_2.9.0_linux_amd64.zip \
+    && unzip nuclei_2.9.0_linux_amd64.zip \
+    && mv nuclei /usr/local/bin/ \
+    && rm nuclei_2.9.0_linux_amd64.zip
+
+WORKDIR /app
+
+# Set environment variables for pyppeteer
+ENV PYTHONPATH=/app
+ENV PYPPETEER_DOWNLOAD_HOST=https://npm.taobao.org/mirrors
+ENV PYPPETEER_CHROMIUM_REVISION=1095492
+ENV PYPPETEER_NO_DOWNLOAD=1
+ENV CHROMIUM_PATH=/usr/bin/chromium
+
+# Copy requirements files
+COPY requirements*.txt ./
+COPY tests/requirements-test.txt ./tests/
+
+# Install project dependencies
+RUN pip install --no-cache-dir -r requirements.txt \
+    && pip install --no-cache-dir -r tests/requirements-test.txt
+
+# Copy project files
+COPY . .
+
+# Install project in editable mode
+RUN pip install -e .[dev]
+
+# Create test results directory
+RUN mkdir -p /app/test-results

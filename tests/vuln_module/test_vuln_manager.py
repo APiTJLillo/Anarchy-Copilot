@@ -1,5 +1,4 @@
 """Tests for vulnerability manager."""
-
 import pytest
 import asyncio
 from unittest.mock import Mock, patch, AsyncMock
@@ -27,6 +26,8 @@ class MockScanner(BaseVulnScanner):
         self.cleanup_called = False
         self.test_results = []
         self.verify_results = {}
+        self.error_on_scan = False
+        self._error_type = RuntimeError
 
     async def setup(self) -> None:
         self.setup_called = True
@@ -35,7 +36,9 @@ class MockScanner(BaseVulnScanner):
         self.cleanup_called = True
 
     async def _scan_target(self) -> AsyncGenerator[VulnResult, None]:
-        """Mock scan implementation using async generator."""
+        """Mock scan implementation."""
+        if self.error_on_scan:
+            raise self._error_type("Test error")
         for result in self.test_results:
             yield result
 
@@ -87,23 +90,18 @@ def mock_vuln_result():
 @pytest.mark.asyncio
 async def test_scan_target(vuln_manager, mock_vuln_result):
     """Test full vulnerability scan execution."""
-    # Configure mock scanner
     scanner = MockScanner(ScanConfig(
         target="http://example.com",
         payload_types={PayloadType.XSS}
     ))
     scanner.test_results = [mock_vuln_result]
-    
-    # Replace default scanner with our configured mock
     vuln_manager.DEFAULT_SCANNERS["mock"] = lambda config: scanner
     
-    # Run scan
     results = await vuln_manager.scan_target(
         target="http://example.com",
         scanner_type="mock"
     )
     
-    # Verify results
     assert len(results) == 1
     assert results[0].name == "Test XSS"
     assert results[0].severity == VulnSeverity.HIGH
@@ -111,28 +109,25 @@ async def test_scan_target(vuln_manager, mock_vuln_result):
     assert scanner.cleanup_called
 
 @pytest.mark.asyncio
-async def test_scanner_error_handling(vuln_manager):
+async def test_scanner_error_handling(vuln_manager, mock_vuln_result):
     """Test handling of scanner errors."""
-    bad_scanner = MockScanner(ScanConfig(
+    scanner = MockScanner(ScanConfig(
         target="http://example.com",
         payload_types={PayloadType.XSS}
     ))
-
-    # Make scanner raise an error using async generator
-    async def error_scan() -> AsyncGenerator[VulnResult, None]:
-        if False:  # Never yield anything
-            yield
-        raise Exception("Test error")
-
-    bad_scanner._scan_target = error_scan
-    vuln_manager.DEFAULT_SCANNERS["mock"] = lambda config: bad_scanner
-
-    # Scan should not raise exception but return empty results
-    results = await vuln_manager.scan_target(
-        target="http://example.com",
-        scanner_type="mock"
-    )
-    assert len(results) == 0
+    scanner.error_on_scan = True
+    vuln_manager.DEFAULT_SCANNERS["mock"] = lambda config: scanner
+    
+    try:
+        await vuln_manager.scan_target(
+            target="http://example.com",
+            scanner_type="mock"
+        )
+    except RuntimeError as e:
+        assert str(e) == "Test error"
+        assert scanner.cleanup_called
+    else:
+        pytest.fail("Expected RuntimeError")
 
 def test_scanner_registration(vuln_manager):
     """Test scanner registration process."""
@@ -194,7 +189,6 @@ def test_supported_scanners(vuln_manager):
 @pytest.mark.asyncio
 async def test_concurrent_scans(vuln_manager, mock_vuln_result):
     """Test running multiple concurrent scans."""
-    # Configure mock scanner
     scanner = MockScanner(ScanConfig(
         target="http://example.com",
         payload_types={PayloadType.XSS}
@@ -209,14 +203,12 @@ async def test_concurrent_scans(vuln_manager, mock_vuln_result):
         "http://example3.com"
     ]
     
-    # Start all scans concurrently
     scan_tasks = [
         vuln_manager.scan_target(target, scanner_type="mock")
         for target in targets
     ]
     results = await asyncio.gather(*scan_tasks)
     
-    # Verify each scan completed successfully
     for result_set in results:
         assert len(result_set) == 1
         assert result_set[0].name == "Test XSS"
@@ -232,14 +224,38 @@ async def test_scan_config_validation(vuln_manager):
         )
 
     # Test with invalid configuration
-    bad_config = ScanConfig(
-        target="",  # Invalid empty target
-        payload_types=set()  # No payload types specified
-    )
+    bad_configs = [
+        {"target": "", "payload_types": []},  # Empty target and payload types
+        {"target": "http://example.com", "max_depth": -1},  # Invalid depth
+        {"target": "http://example.com", "threads": 0},  # Invalid thread count
+        {"target": "http://example.com", "timeout": -1}  # Invalid timeout
+    ]
     
-    with pytest.raises(ValueError):
-        await vuln_manager.scan_target(
-            target="http://example.com",
-            scanner_type="mock",
-            config=bad_config
-        )
+    for config in bad_configs:
+        with pytest.raises(ValueError):
+            await vuln_manager.scan_target(
+                target="http://example.com",
+                scanner_type="mock",
+                config=config
+            )
+
+    # Test with valid config
+    valid_config = {
+        "target": "http://example.com",
+        "payload_types": ["XSS"],
+        "max_depth": 3,
+        "threads": 10
+    }
+    
+    scanner = MockScanner(ScanConfig(
+        target="http://example.com",
+        payload_types={PayloadType.XSS}
+    ))
+    vuln_manager.DEFAULT_SCANNERS["mock"] = lambda config: scanner
+    
+    results = await vuln_manager.scan_target(
+        target="http://example.com",
+        scanner_type="mock",
+        config=valid_config
+    )
+    assert isinstance(results, list)

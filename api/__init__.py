@@ -38,14 +38,25 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],  # Allow all origins for testing
-        allow_credentials=True,
+        allow_credentials=False,  # Must be False when allow_origins=["*"]
         allow_methods=["*"],
         allow_headers=["*"],
+        allow_origin_regex=None,
+        expose_headers=["*"],
+        max_age=600,
     )
 
-    # Register routers
-    app.include_router(health_router, prefix="/api")
-    app.include_router(proxy_router, prefix="/api")
+    # Add CORS handler to ensure "*" is always returned
+    @app.middleware("http")
+    async def always_allow_origin(request, call_next):
+        response = await call_next(request)
+        if "access-control-allow-origin" in response.headers:
+            response.headers["access-control-allow-origin"] = "*"
+        return response
+
+    # Register routers - they have their own prefixes now
+    app.include_router(health_router, prefix="/api")  # Will be mounted at /api/health/*
+    app.include_router(proxy_router, prefix="/api")  # Already has /api/proxy/* prefix
 
     # Register event handlers using decorators
     @app.on_event("startup")

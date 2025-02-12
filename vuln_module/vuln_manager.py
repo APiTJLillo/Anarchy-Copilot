@@ -42,7 +42,7 @@ class VulnManager:
         if scanner_type not in self.DEFAULT_SCANNERS:
             raise ValueError(f"Unsupported scanner type: {scanner_type}")
 
-        # Create scan configuration
+        # Create scan configuration with empty dict if config is None
         scan_config = self._create_scan_config(target, config or {})
 
         # Initialize scanner
@@ -154,17 +154,72 @@ class VulnManager:
         config: Dict[str, Any]
     ) -> ScanConfig:
         """Create scan configuration from user input."""
+        # Validate target URL
+        if not target:
+            raise ValueError("Target URL is required")
+
+        # Initialize config with defaults if empty
+        if not config:
+            config = {
+                "payload_types": [pt.name for pt in PayloadType],
+                "max_depth": 3,
+                "threads": 10,
+                "timeout": 30
+            }
+
+        # Validate target in config
+        if "target" in config and not config["target"]:
+            raise ValueError("Target URL cannot be empty when provided")
+
+        # Validate payload types if provided
+        if "payload_types" in config and not config["payload_types"]:
+            raise ValueError("payload_types cannot be empty when provided")
+
+        # Validate numeric fields
+        max_depth = config.get("max_depth", 3)
+        if not isinstance(max_depth, (int, float)) or max_depth < 0:
+            raise ValueError("max_depth must be a non-negative number")
+        max_depth = int(max_depth)  # Convert to int for ScanConfig
+        
+        threads = config.get("threads", 10)
+        if not isinstance(threads, (int, float)) or threads < 1:
+            raise ValueError("threads must be a positive integer")
+        threads = int(threads)  # Convert to int for ScanConfig
+            
+        timeout = config.get("timeout", 30)
+        if not isinstance(timeout, (int, float)) or timeout < 0:
+            raise ValueError("timeout must be a non-negative number")
+        timeout = int(timeout)  # Convert to int for ScanConfig
+
+        # Handle payload types
+        payload_types = config.get("payload_types", None)
+        if payload_types == []:  # Empty list provided
+            raise ValueError("payload_types cannot be empty when provided")
+        if payload_types is not None and not isinstance(payload_types, (list, set)):
+            raise ValueError("payload_types must be a list or set")
+        payload_types = payload_types or [pt.name for pt in PayloadType]
+        payload_type_set = set()
+        
+        # Convert string payload types to enum
+        if isinstance(payload_types, (list, set)):
+            for pt in payload_types:
+                if isinstance(pt, str):
+                    try:
+                        payload_type_set.add(PayloadType[pt])
+                    except KeyError:
+                        raise ValueError(f"Invalid payload type: {pt}")
+                elif isinstance(pt, PayloadType):
+                    payload_type_set.add(pt)
+                else:
+                    raise ValueError("Invalid payload type format")
+        
+        # Create config with validated values
         return ScanConfig(
             target=target,
-            payload_types=set(
-                PayloadType[p] for p in config.get(
-                    "payload_types",
-                    [pt.name for pt in PayloadType]
-                )
-            ),
-            max_depth=config.get("max_depth", 3),
-            threads=config.get("threads", 10),
-            timeout=config.get("timeout", 30),
+            payload_types=payload_type_set or {pt for pt in PayloadType},
+            max_depth=max_depth,
+            threads=threads,
+            timeout=timeout,
             custom_headers=config.get("headers", {}),
             cookies=config.get("cookies", {}),
             proxy=config.get("proxy"),

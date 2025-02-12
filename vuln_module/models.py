@@ -7,11 +7,21 @@ from enum import Enum, auto
 
 class VulnSeverity(Enum):
     """Vulnerability severity levels."""
-    INFO = auto()
-    LOW = auto()
-    MEDIUM = auto()
-    HIGH = auto()
-    CRITICAL = auto()
+    INFO = 1
+    LOW = 2
+    MEDIUM = 3
+    HIGH = 4
+    CRITICAL = 5
+
+    def __lt__(self, other):
+        if self.__class__ is other.__class__:
+            return self.value < other.value
+        return NotImplemented
+
+    def __gt__(self, other):
+        if self.__class__ is other.__class__:
+            return self.value > other.value
+        return NotImplemented
 
 class PayloadType(Enum):
     """Types of vulnerability payloads."""
@@ -36,6 +46,16 @@ class Payload:
     metadata: Dict[str, Any] = field(default_factory=dict)
     generated_by: Optional[str] = None  # AI model or tool that generated this
     effectiveness_score: Optional[float] = None  # Historical success rate
+
+    def __post_init__(self):
+        """Validate the payload type."""
+        if isinstance(self.type, str):
+            try:
+                self.type = PayloadType[self.type.upper()]
+            except KeyError:
+                raise ValueError(f"Invalid payload type: {self.type}")
+        elif not isinstance(self.type, PayloadType):
+            raise ValueError(f"Invalid payload type: {self.type}")
 
 @dataclass
 class PayloadResult:

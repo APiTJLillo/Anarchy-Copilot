@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict, Optional
 from unittest.mock import Mock, patch
 
-from anarchy_copilot.proxy import (
+from proxy import (
     ProxyConfig,
     ProxyServer,
     InterceptedRequest,

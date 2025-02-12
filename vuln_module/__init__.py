@@ -8,7 +8,7 @@ from .models import (
     PayloadType,
     ScanConfig
 )
-from .scanner.base import VulnScanner
+from .scanner.base import BaseVulnScanner
 from .scanner.nuclei import NucleiScanner
 
 __all__ = [
@@ -18,7 +18,7 @@ __all__ = [
     'VulnSeverity',
     'PayloadType',
     'ScanConfig',
-    'VulnScanner',
+    'BaseVulnScanner',
     'NucleiScanner',
 ]
 

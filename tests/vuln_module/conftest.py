@@ -1,116 +1,66 @@
-"""Shared fixtures and helpers for vulnerability module tests."""
-
+"""Test fixtures for vulnerability module."""
 import pytest
+import shutil
+import tempfile
 import time
-from typing import Dict, Any, List
-from datetime import datetime
+from pathlib import Path
 
-from vuln_module.models import (
-    VulnResult,
-    VulnSeverity,
-    PayloadType,
-    Payload,
-    PayloadResult,
-    ScanConfig
-)
+@pytest.fixture
+def mock_time(monkeypatch):
+    """Mock time functions for rate limiting tests."""
+    class MockTime:
+        def __init__(self):
+            self.current_time = 0
 
-class TimeHelpers:
-    """Helper functions for time-based tests."""
+        def sleep(self, seconds):
+            self.current_time += seconds
+            return self.current_time
+
+        def time(self):
+            return self.current_time
+
+    mock = MockTime()
     
-    @staticmethod
-    def time() -> float:
-        """Get current time in seconds."""
-        return time.time()
+    async def mock_async_sleep(seconds):
+        mock.sleep(seconds)
 
-    @staticmethod
-    def sleep(seconds: float) -> None:
-        """Sleep for specified seconds."""
-        time.sleep(seconds)
+    monkeypatch.setattr("time.time", mock.time)
+    monkeypatch.setattr("time.sleep", mock.sleep)
+    monkeypatch.setattr("asyncio.sleep", mock_async_sleep)
+    return mock
 
 @pytest.fixture
-def time_helpers() -> TimeHelpers:
-    """Provide time helper methods."""
-    return TimeHelpers()
+def time_helper(mock_time):
+    """Helper functions for time-based tests."""
+    class TimeHelper:
+        @staticmethod
+        def get_time():
+            return mock_time.time()
 
-# Register time helpers globally
-pytest.helpers = TimeHelpers  # type: ignore
-
-@pytest.fixture
-def basic_scan_config() -> ScanConfig:
-    """Basic scan configuration for testing."""
-    return ScanConfig(
-        target="http://example.com",
-        payload_types={PayloadType.XSS, PayloadType.SQLI},
-        max_depth=2,
-        threads=1,
-        timeout=5
-    )
+    return TimeHelper()
 
 @pytest.fixture
-def nuclei_response_data() -> Dict[str, Any]:
-    """Sample Nuclei scan response data."""
-    return {
-        "template-id": "test-vulnerability",
-        "type": "http",
-        "host": "example.com",
-        "matched-at": "http://example.com/test",
-        "severity": "high",
-        "info": {
-            "name": "Test Vulnerability",
-            "description": "Test vulnerability description",
-            "severity": "high",
-            "reference": ["https://example.com/ref"]
-        },
-        "matcher-name": "test-matcher",
-        "extracted-values": {},
-        "request": "GET /test HTTP/1.1",
-        "response": "HTTP/1.1 200 OK",
-        "curl-command": "curl -X GET http://example.com/test",
-        "timestamp": datetime.now().isoformat(),
-        "matched-line": "<script>alert(1)</script>"
-    }
+def temp_dir():
+    """Create a temporary directory for test files."""
+    temp_path = Path(tempfile.mkdtemp())
+    try:
+        yield temp_path
+    finally:
+        shutil.rmtree(str(temp_path), ignore_errors=True)
 
-@pytest.fixture
-def test_payloads() -> Dict[PayloadType, List[str]]:
-    """Collection of test payloads by type."""
-    return {
-        PayloadType.XSS: [
-            "<script>alert(1)</script>",
-            "javascript:alert(document.domain)"
-        ],
-        PayloadType.SQLI: [
-            "' OR '1'='1",
-            "UNION SELECT NULL--"
-        ],
-        PayloadType.PATH_TRAVERSAL: [
-            "../../../etc/passwd",
-            "..\\..\\..\\windows\\win.ini"
-        ],
-        PayloadType.COMMAND_INJECTION: [
-            "$(id)",
-            "`whoami`"
-        ]
-    }
+@pytest.fixture(autouse=True)
+def mock_nuclei_installation(monkeypatch):
+    """Mock nuclei binary presence."""
+    monkeypatch.setenv("PATH", "/mock/path")
+    monkeypatch.setattr("shutil.which", lambda x: "/mock/path/nuclei" if x == "nuclei" else None)
 
-@pytest.fixture
-def mock_templates_dir(tmp_path) -> str:
-    """Create a temporary directory for test templates."""
-    templates_dir = tmp_path / "templates"
-    templates_dir.mkdir()
-    return str(templates_dir)
+@pytest.fixture(autouse=True)
+def mock_temp_directory(temp_dir, monkeypatch):
+    """Mock temporary directory creation to use test directory."""
+    def mock_mkdtemp(*args, **kwargs):
+        test_dir = temp_dir / "nuclei_test"
+        test_dir.mkdir(exist_ok=True)
+        return str(test_dir)
 
-@pytest.fixture
-def mock_output_file(tmp_path) -> str:
-    """Create a temporary file for test output."""
-    return str(tmp_path / "nuclei_output.json")
-
-def pytest_configure(config):
-    """Configure pytest with custom markers."""
-    config.addinivalue_line(
-        "markers",
-        "integration: mark test as integration test"
-    )
-    config.addinivalue_line(
-        "markers",
-        "slow: mark test as slow running"
-    )
+    monkeypatch.setattr("tempfile.mkdtemp", mock_mkdtemp)
+    monkeypatch.setattr("shutil.rmtree", lambda x, **kwargs: None)

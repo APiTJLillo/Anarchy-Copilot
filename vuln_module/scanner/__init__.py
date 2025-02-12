@@ -1,9 +1,9 @@
 """Vulnerability scanning module."""
 
-from .base import VulnScanner
-from .nuclei import NucleiScanner
+from .base import BaseVulnScanner
+from .nuclei.scanner import NucleiScanner
 
 __all__ = [
-    'VulnScanner',
+    'BaseVulnScanner',
     'NucleiScanner',
 ]

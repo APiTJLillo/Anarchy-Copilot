@@ -1,11 +1,21 @@
 """Tests for version information."""
 
-import pytest
 import re
+from typing import Tuple, Callable, Any
 from unittest.mock import patch, MagicMock
-from packaging.version import Version
+try:
+    from packaging.version import Version  # type: ignore
+except ImportError:
+    from pkg_resources._vendor.packaging.version import Version  # type: ignore
 
-from anarchy_copilot.version import (
+import pytest
+from pytest import mark
+
+# Type for pytest parametrize decorator
+Parametrize = Callable[..., Any]
+parametrize: Parametrize = mark.parametrize  # type: ignore
+
+from version import (
     __version__,
     get_version,
     get_version_info,
@@ -18,25 +28,25 @@ from anarchy_copilot.version import (
     DEPENDENCY_VERSIONS
 )
 
-def test_version_format():
+def test_version_format() -> None:
     """Test version string format."""
     # Version should match semantic versioning
     pattern = r'^\d+\.\d+\.\d+$'
     assert re.match(pattern, __version__), "Version should follow semantic versioning"
     
     # Version components should match major.minor.patch
-    version = Version(__version__)
-    assert version.major == VERSION_MAJOR
-    assert version.minor == VERSION_MINOR
-    assert version.micro == VERSION_PATCH
+    pkg_version = Version(__version__)  # type: ignore
+    assert pkg_version.major == VERSION_MAJOR  # type: ignore
+    assert pkg_version.minor == VERSION_MINOR  # type: ignore
+    assert pkg_version.micro == VERSION_PATCH  # type: ignore
 
-def test_get_version():
+def test_get_version() -> None:
     """Test get_version function."""
     version = get_version()
     assert version == __version__
     assert isinstance(version, str)
 
-def test_version_info_structure():
+def test_version_info_structure() -> None:
     """Test version info dictionary structure."""
     info = get_version_info()
     
@@ -62,20 +72,20 @@ def test_version_info_structure():
     assert "author" in info["metadata"]
     assert "license" in info["metadata"]
 
-def test_component_versions_consistency():
+def test_component_versions_consistency() -> None:
     """Test component versions are consistent."""
     # All components should have the same version in development
     assert len(set(COMPONENT_VERSIONS.values())) == 1
     assert all(v == __version__ for v in COMPONENT_VERSIONS.values())
 
-@pytest.mark.parametrize("python_version,expected", [
+@parametrize("python_version,expected", [
     ((3, 8, 0), True),    # Minimum supported
     ((3, 9, 0), True),    # Supported
     ((3, 10, 0), True),   # Supported
     ((3, 7, 0), False),   # Too old
     ((2, 7, 0), False),   # Python 2
 ])
-def test_python_version_compatibility(python_version, expected):
+def test_python_version_compatibility(python_version: Tuple[int, int, int], expected: bool) -> None:
     """Test Python version compatibility check."""
     with patch('sys.version_info', python_version):
         with patch('pkg_resources.require') as mock_require:
@@ -84,7 +94,7 @@ def test_python_version_compatibility(python_version, expected):
                 mock_require.return_value = True
                 assert check_compatibility() == expected
 
-def test_dependency_version_check():
+def test_dependency_version_check() -> None:
     """Test dependency version checking."""
     # Mock successful dependency checks
     with patch('pkg_resources.require') as mock_require:
@@ -97,7 +107,7 @@ def test_dependency_version_check():
         mock_require.side_effect = Exception("Version conflict")
         assert not check_compatibility()
 
-def test_nuclei_compatibility():
+def test_nuclei_compatibility() -> None:
     """Test Nuclei version compatibility check."""
     with patch('pkg_resources.require') as mock_require:
         mock_require.return_value = True
@@ -115,7 +125,7 @@ def test_nuclei_compatibility():
         with patch('subprocess.run', side_effect=FileNotFoundError):
             assert not check_compatibility()
 
-def test_build_info_format():
+def test_build_info_format() -> None:
     """Test build information format."""
     # Check timestamp format
     timestamp_pattern = r'^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$'
@@ -129,7 +139,7 @@ def test_build_info_format():
     assert isinstance(BUILD_INFO["build_number"], str)
     assert isinstance(BUILD_INFO["build_type"], str)
 
-def test_dependency_versions_format():
+def test_dependency_versions_format() -> None:
     """Test dependency versions specification format."""
     version_pattern = r'^[>=<]+=\d+\.\d+\.\d+$'
     for dep_version in DEPENDENCY_VERSIONS.values():

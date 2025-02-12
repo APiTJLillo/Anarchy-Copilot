@@ -9,6 +9,7 @@ This directory contains the test suite for the Anarchy Copilot project. The test
 - Docker (optional, for containerized testing)
 
 Install test dependencies:
+
 ```bash
 make install-test
 ```
@@ -35,11 +36,13 @@ tests/
 ### Quick Start
 
 1. Validate your test environment:
+
 ```bash
 python -m tests.tools.validate_environment
 ```
 
 2. Run all tests:
+
 ```bash
 make test
 ```
@@ -67,11 +70,13 @@ make test-marked MARKER="integration"
 ### Test Coverage
 
 Generate coverage report:
+
 ```bash
 make test-coverage
 ```
 
 View the HTML coverage report:
+
 ```bash
 open test-reports/coverage/index.html
 ```
@@ -88,6 +93,7 @@ open test-reports/coverage/index.html
 ### pytest Configuration
 
 See `pytest.ini` for detailed configuration settings including:
+
 - Test discovery patterns
 - Markers
 - Coverage settings
@@ -97,6 +103,7 @@ See `pytest.ini` for detailed configuration settings including:
 ## Test Reports
 
 Test results are written to `test-reports/` and include:
+
 - JUnit XML report (`junit.xml`)
 - Coverage report (`coverage.xml`, `htmlcov/`)
 - HTML test report (`report.html`)
@@ -126,7 +133,7 @@ open test-reports/report.html
 
 ```python
 import pytest
-from anarchy_copilot.vuln_module import VulnScanner
+fromvuln_module import VulnScanner
 
 @pytest.mark.integration
 async def test_vulnerability_scan(example_target):
@@ -163,26 +170,31 @@ def example_target(temp_dir):
 ## Development Workflow
 
 1. Set up your environment:
+
 ```bash
 make dev-setup
 ```
 
 2. Run environment validation:
+
 ```bash
 python -m tests.tools.validate_environment
 ```
 
 3. Write tests for new features:
+
 ```bash
 touch tests/module_name/test_feature.py
 ```
 
 4. Run tests and check coverage:
+
 ```bash
 make test-coverage
 ```
 
 5. Generate and review test report:
+
 ```bash
 make test-report
 ```
@@ -190,6 +202,7 @@ make test-report
 ## Continuous Integration
 
 Tests are automatically run in CI for:
+
 - Pull requests to main/develop
 - Push to main/develop
 - Scheduled security scans
@@ -211,16 +224,19 @@ See `.github/workflows/test.yml` for CI configuration.
 ### Common Issues
 
 1. **Missing Dependencies**
+
 ```bash
 pip install -r tests/requirements-test.txt
 ```
 
 2. **Environment Setup**
+
 ```bash
 python -m tests.tools.validate_environment
 ```
 
 3. **Test Failures**
+
 - Check test reports in `test-reports/`
 - Enable debug logging: `TEST_DEBUG=true`
 - Run specific test with -v: `pytest -v test_file.py`

@@ -9,10 +9,11 @@ from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from collections import deque
 import uuid
+import re
 
 from .interceptor import InterceptedRequest, InterceptedResponse
 
-@dataclass
+@dataclass(eq=True)
 class HistoryEntry:
     """Represents a single request/response pair in the proxy history."""
     id: str
@@ -33,13 +34,25 @@ class HistoryEntry:
     def duration(self, value: float) -> None:
         """Set the request duration."""
         self._duration = value
+
+    def __eq__(self, other: object) -> bool:
+        """Compare history entries for equality."""
+        if not isinstance(other, HistoryEntry):
+            return False
+        return (
+            self.id == other.id and
+            self.request == other.request and
+            self.response == other.response and
+            self.tags == other.tags and
+            self.notes == other.notes
+        )
     
     def to_dict(self) -> dict:
         """Convert history entry to a dictionary format."""
         return {
             'id': self.id,
             'timestamp': self.timestamp.isoformat(),
-            'request': self.request.to_dict(),
+            'request': self.request.to_dict() if self.request else None,
             'response': self.response.to_dict() if self.response else None,
             'duration': self.duration,
             'tags': self.tags,
@@ -58,7 +71,7 @@ class ProxySession:
         self.id = str(uuid.uuid4())
         self.created_at = datetime.now()
         self._history: deque[HistoryEntry] = deque(maxlen=max_history)
-        self._pending_requests: Dict[str, Tuple[HistoryEntry, datetime]] = {}
+        self._pending_requests: Dict[str, HistoryEntry] = {}
         self.metadata: Dict[str, str] = {}
     
     def create_history_entry(self, request: InterceptedRequest) -> HistoryEntry:
@@ -75,7 +88,7 @@ class ProxySession:
             timestamp=datetime.now(),
             request=request
         )
-        self._pending_requests[entry.id] = (entry, datetime.now())
+        self._pending_requests[entry.id] = entry
         return entry
     
     def complete_history_entry(self, entry_id: str, response: InterceptedResponse) -> None:
@@ -86,9 +99,8 @@ class ProxySession:
             response: The intercepted response
         """
         if entry_id in self._pending_requests:
-            entry, start_time = self._pending_requests.pop(entry_id)
+            entry = self._pending_requests.pop(entry_id)
             entry.response = response
-            entry.duration = (datetime.now() - start_time).total_seconds()
             self._history.append(entry)
     
     def get_history(self, limit: Optional[int] = None) -> List[HistoryEntry]:
@@ -113,6 +125,11 @@ class ProxySession:
         Returns:
             The found entry or None
         """
+        # First check pending requests
+        if entry_id in self._pending_requests:
+            return self._pending_requests[entry_id]
+        
+        # Then check completed history
         for entry in self._history:
             if entry.id == entry_id:
                 return entry

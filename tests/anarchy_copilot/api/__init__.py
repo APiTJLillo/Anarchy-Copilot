@@ -26,7 +26,7 @@ def test_env() -> Dict[str, Any]:
 @pytest.fixture(scope="session")
 def test_app(test_env: Dict[str, Any]) -> FastAPI:
     """Create FastAPI test application."""
-    from anarchy_copilot.api import create_app
+    from api import create_app
 
     app = create_app(test_env)
     return app

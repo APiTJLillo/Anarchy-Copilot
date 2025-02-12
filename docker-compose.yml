@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   test:
@@ -10,8 +10,10 @@ services:
       - test-cache:/root/.cache
     environment:
       - PYTHONPATH=/app
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
       - PYTEST_ADDOPTS="-v"
-    command: pytest tests/ -v
+    command: python -m pytest tests/ -v
 
   dev:
     build:
@@ -22,11 +24,12 @@ services:
       - ~/.nuclei:/root/.nuclei
       - dev-cache:/root/.cache
     ports:
-      - "8000:8000"    # API
+      - "8000:8000" # API
     environment:
-      - PYTHONPATH=/app
+      - PYTHONPATH=/app:/app/anarchy-copilot
+      - PYTEST_ADDOPTS="-v --import-mode=append"
       - NUCLEI_TEMPLATES=/root/.nuclei/templates
-    command: python -m uvicorn anarchy_copilot.api:app --host 0.0.0.0 --port 8000 --reload
+    command: python -m uvicorn api:app --host 0.0.0.0 --port 8000 --reload
 
   proxy:
     build:
@@ -37,9 +40,9 @@ services:
       - proxy-certs:/app/certs
       - proxy-data:/app/data
     ports:
-      - "8080:8080"  # Proxy
+      - "8080:8080" # Proxy
     environment:
-      - PYTHONPATH=/app
+      - PYTHONPATH=/app:/app/anarchy-copilot
       - PROXY_HOST=0.0.0.0
       - PROXY_PORT=8080
       - CA_CERT_PATH=/app/certs/ca.crt
@@ -84,8 +87,9 @@ services:
       - ~/.nuclei:/root/.nuclei
       - validate-cache:/root/.cache
     environment:
-      - PYTHONPATH=/app
-    command: python -m tests.tools.validate_templates
+      - PYTHONPATH=/app:/app/anarchy-copilot
+      - PYTEST_ADDOPTS="-v --import-mode=append"
+    command: python -m pytest tests.tools.validate_templates -v --import-mode=append
 
 volumes:
   test-cache:

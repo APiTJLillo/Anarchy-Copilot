@@ -6,7 +6,6 @@ from typing import Dict, List, Optional, Set
 from pathlib import Path
 import ssl
 
-
 @dataclass
 class ProxyConfig:
     """Configuration settings for the proxy server."""
@@ -47,6 +46,42 @@ class ProxyConfig:
     # Security settings
     verify_ssl: bool = True
     strip_proxy_headers: bool = True
+
+    def __post_init__(self):
+        """Validate configuration after initialization."""
+        if not isinstance(self.port, int) or self.port <= 0 or self.port > 65535:
+            raise ValueError("Port must be between 1 and 65535")
+        
+        if not isinstance(self.host, str) or not self.host:
+            raise ValueError("Host must be a non-empty string")
+        
+        if self.max_connections <= 0:
+            raise ValueError("Max connections must be positive")
+        
+        if self.connection_timeout <= 0:
+            raise ValueError("Connection timeout must be positive")
+        
+        if self.read_timeout <= 0:
+            raise ValueError("Read timeout must be positive")
+        
+        if self.write_timeout <= 0:
+            raise ValueError("Write timeout must be positive")
+        
+        if self.history_size <= 0:
+            raise ValueError("History size must be positive")
+        
+        if self.ca_cert_path and not isinstance(self.ca_cert_path, Path):
+            self.ca_cert_path = Path(self.ca_cert_path)
+            
+        if self.ca_key_path and not isinstance(self.ca_key_path, Path):
+            self.ca_key_path = Path(self.ca_key_path)
+            
+        if self.storage_path and not isinstance(self.storage_path, Path):
+            self.storage_path = Path(self.storage_path)
+            
+        # Ensure both cert and key are provided if either is provided
+        if bool(self.ca_cert_path) != bool(self.ca_key_path):
+            raise ValueError("Both CA certificate and key must be provided together")
     
     def is_in_scope(self, host: str) -> bool:
         """Check if a host is within the configured scope."""

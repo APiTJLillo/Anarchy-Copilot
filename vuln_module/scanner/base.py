@@ -1,11 +1,15 @@
 """Base interface for vulnerability scanners."""
 
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional, AsyncIterator
+from typing import List, Dict, Any, Optional, AsyncIterator, AsyncIterable
 import asyncio
+import logging
 from datetime import datetime
 
-from ..models import VulnResult, ScanConfig, PayloadResult, PayloadType
+logger = logging.getLogger(__name__)
+
+from ..models import VulnResult, ScanConfig, PayloadResult, PayloadType, VulnSeverity
+from ..rate_limiter import RateLimiter
 
 class BaseVulnScanner(ABC):
     """Abstract base class for vulnerability scanners."""
@@ -22,6 +26,7 @@ class BaseVulnScanner(ABC):
             "payloads_tested": 0,
             "errors": 0
         }
+        self._rate_limiter = RateLimiter(config.rate_limit if config.rate_limit else 0)
 
     @property
     def stats(self) -> Dict[str, Any]:
@@ -48,22 +53,47 @@ class BaseVulnScanner(ABC):
 
     @abstractmethod
     async def _scan_target(self) -> AsyncIterator[VulnResult]:
-        """Perform the actual scanning."""
-        pass
+        """Perform the actual scanning.
+        
+        This method must be implemented by subclasses to yield scan results.
+        It must be implemented as an async generator that yields VulnResult objects.
+        """
+        if False:  # This ensures proper typing while allowing empty implementation
+            yield VulnResult(
+                name="",
+                type="",
+                severity=VulnSeverity.INFO,
+                description="",
+                endpoint="",
+                payloads=[]
+            )
 
     async def scan(self) -> List[VulnResult]:
         """Run vulnerability scan on the target."""
         results: List[VulnResult] = []
         self._start_time = datetime.now()
         self._running = True
+        self._current_task = asyncio.current_task()
 
         try:
             await self.setup()
-            async for result in self._scan_target():
-                results.append(result)
-                self._stats["vulnerabilities_found"] += 1
+            try:
+                async for result in self._scan_target():
+                    if not self._running:
+                        break
+                    results.append(result)
+                    self._stats["vulnerabilities_found"] += 1
+                    await self.rate_limit()
+            except asyncio.CancelledError:
+                self._stats["errors"] += 1
+                logger.warning("Scan cancelled")
+            except Exception as e:
+                self._stats["errors"] += 1
+                logger.error(f"Scan error: {e}")
+                raise
         finally:
             self._running = False
+            self._current_task = None
             await self.cleanup()
 
         return results
@@ -91,5 +121,4 @@ class BaseVulnScanner(ABC):
 
     async def rate_limit(self) -> None:
         """Apply rate limiting if configured."""
-        if self.config.rate_limit:
-            await asyncio.sleep(1 / self.config.rate_limit)
+        await self._rate_limiter.acquire()

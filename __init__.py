@@ -11,7 +11,7 @@ DATA_DIR = os.path.join(ROOT_DIR, "data")
 os.makedirs(DATA_DIR, exist_ok=True)
 
 try:
-    from anarchy_copilot.recon_module import (
+    from recon_module import (
         ReconManager,
         ReconResult,
         ScanResult,

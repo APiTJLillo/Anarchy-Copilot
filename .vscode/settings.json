@@ -7,7 +7,13 @@
         "-v",
         "--asyncio-mode=auto"
     ],
-    "python.analysis.typeCheckingMode": "strict",
+    "python.analysis.typeCheckingMode": "basic",
+    "python.analysis.diagnosticMode": "workspace",
+    "python.analysis.stubPath": "./typings",
+    "python.analysis.extraPaths": [
+        ".",
+        "./anarchy-copilot"
+    ],
     "editor.formatOnSave": true,
     "python.formatting.provider": "black",
     "python.formatting.blackArgs": [
@@ -20,7 +26,7 @@
     ],
     "[python]": {
         "editor.codeActionsOnSave": {
-            "source.organizeImports": true
+            "source.organizeImports": "explicit"
         }
     },
     "python.linting.enabled": true,
@@ -49,5 +55,6 @@
         ".mypy_cache/**": true,
         ".coverage": true,
         "htmlcov/**": true
-    }
+    },
+    "makefile.configureOnOpen": false
 }

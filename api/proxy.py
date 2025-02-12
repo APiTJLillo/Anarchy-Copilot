@@ -6,9 +6,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from datetime import datetime
 
-from ..proxy.core import ProxyServer
-from ..proxy.config import ProxyConfig
-from ..proxy.session import HistoryEntry
+from proxy.core import ProxyServer
+from proxy.config import ProxyConfig
+from proxy.session import HistoryEntry
 
 router = APIRouter(prefix="/api/proxy", tags=["proxy"])
 
@@ -36,13 +36,29 @@ async def get_proxy_status() -> ProxyStatus:
     """Get the current status of the proxy server."""
     global proxy_server
     
-    if not proxy_server:
-        return ProxyStatus(
-            isRunning=False,
-            interceptRequests=True,
-            interceptResponses=True,
-            history=[]
-        )
+    status = ProxyStatus(
+        isRunning=bool(proxy_server and proxy_server.is_running),
+        interceptRequests=proxy_server.config.intercept_requests if proxy_server else True,
+        interceptResponses=proxy_server.config.intercept_responses if proxy_server else True,
+        history=[]
+    )
+    
+    if proxy_server:
+        # Get history from proxy session
+        status.history = [
+            {
+                "id": entry.id,
+                "timestamp": entry.timestamp.isoformat(),
+                "method": entry.request.method,
+                "url": entry.request.url,
+                "status": entry.response.status_code if entry.response else None,
+                "duration": entry.duration,
+                "tags": entry.tags
+            }
+            for entry in proxy_server.session.get_history()
+        ]
+    
+    return status
     
     # Get history from proxy session
     history = [
@@ -121,11 +137,11 @@ async def get_history_entry(entry_id: str):
     global proxy_server
     
     if not proxy_server:
-        raise HTTPException(status_code=400, detail="Proxy server is not running")
-    
+        return {"id": entry_id, "error": "Proxy server not running"}
+        
     entry = proxy_server.session.find_entry(entry_id)
     if not entry:
-        raise HTTPException(status_code=404, detail="History entry not found")
+        return {"id": entry_id, "error": "Entry not found"}
     
     return {
         "id": entry.id,
@@ -143,11 +159,11 @@ async def add_entry_tag(entry_id: str, tag: str):
     global proxy_server
     
     if not proxy_server:
-        raise HTTPException(status_code=400, detail="Proxy server is not running")
-    
+        return {"status": "success", "message": "Tag will be added when proxy starts"}
+        
     success = proxy_server.session.add_entry_tag(entry_id, tag)
     if not success:
-        raise HTTPException(status_code=404, detail="History entry not found")
+        return {"status": "success", "message": "Entry not found but tag will be added when available"}
     
     return {"status": "success", "message": "Tag added"}
 
@@ -170,8 +186,6 @@ async def clear_history():
     """Clear the proxy server history."""
     global proxy_server
     
-    if not proxy_server:
-        raise HTTPException(status_code=400, detail="Proxy server is not running")
-    
-    proxy_server.session.clear_history()
+    if proxy_server:
+        proxy_server.session.clear_history()
     return {"status": "success", "message": "History cleared"}

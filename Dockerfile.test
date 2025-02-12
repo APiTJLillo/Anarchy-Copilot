@@ -30,9 +30,11 @@ ENV CHROMIUM_PATH=/usr/bin/chromium
 COPY requirements*.txt ./
 COPY tests/requirements-test.txt ./tests/
 
-# Install project dependencies
-RUN pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir -r tests/requirements-test.txt
+# Install test dependencies first for type checking
+RUN pip install --no-cache-dir -r tests/requirements-test.txt
+
+# Install project dependencies 
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy project files
 COPY . .

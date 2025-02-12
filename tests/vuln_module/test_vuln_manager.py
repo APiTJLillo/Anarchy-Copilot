@@ -4,9 +4,10 @@ import pytest
 import asyncio
 from unittest.mock import Mock, patch, AsyncMock
 from datetime import datetime
+from typing import AsyncGenerator
 
-from anarchy_copilot.vuln_module.vuln_manager import VulnManager
-from anarchy_copilot.vuln_module.models import (
+from vuln_module.vuln_manager import VulnManager
+from vuln_module.models import (
     VulnResult,
     VulnSeverity,
     PayloadType,
@@ -14,7 +15,7 @@ from anarchy_copilot.vuln_module.models import (
     PayloadResult,
     Payload
 )
-from anarchy_copilot.vuln_module.scanner.base import BaseVulnScanner
+from vuln_module.scanner.base import BaseVulnScanner
 
 # Mock scanner for testing
 class MockScanner(BaseVulnScanner):
@@ -33,7 +34,8 @@ class MockScanner(BaseVulnScanner):
     async def cleanup(self) -> None:
         self.cleanup_called = True
 
-    async def _scan_target(self):
+    async def _scan_target(self) -> AsyncGenerator[VulnResult, None]:
+        """Mock scan implementation using async generator."""
         for result in self.test_results:
             yield result
 
@@ -115,14 +117,16 @@ async def test_scanner_error_handling(vuln_manager):
         target="http://example.com",
         payload_types={PayloadType.XSS}
     ))
-    
-    # Make scanner raise an error
-    async def error_scan():
+
+    # Make scanner raise an error using async generator
+    async def error_scan() -> AsyncGenerator[VulnResult, None]:
+        if False:  # Never yield anything
+            yield
         raise Exception("Test error")
-    
+
     bad_scanner._scan_target = error_scan
     vuln_manager.DEFAULT_SCANNERS["mock"] = lambda config: bad_scanner
-    
+
     # Scan should not raise exception but return empty results
     results = await vuln_manager.scan_target(
         target="http://example.com",
@@ -228,9 +232,14 @@ async def test_scan_config_validation(vuln_manager):
         )
 
     # Test with invalid configuration
+    bad_config = ScanConfig(
+        target="",  # Invalid empty target
+        payload_types=set()  # No payload types specified
+    )
+    
     with pytest.raises(ValueError):
         await vuln_manager.scan_target(
             target="http://example.com",
             scanner_type="mock",
-            config={"invalid": "config"}
+            config=bad_config
         )

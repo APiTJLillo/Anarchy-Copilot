@@ -94,7 +94,7 @@ class CertificateAuthority:
             key_file.write(
                 crypto.dump_privatekey(crypto.FILETYPE_PEM, self.ca_key))
     
-    def generate_certificate(self, hostname: str) -> tuple[bytes, bytes]:
+    def generate_certificate(self, hostname: str) -> "tuple[bytes, bytes]":
         """Generate a certificate for a specific hostname.
         
         Args:
@@ -148,6 +148,9 @@ class ProxyServer:
         self._request_interceptors: List[RequestInterceptor] = []
         self._response_interceptors: List[ResponseInterceptor] = []
         self._ssl_contexts: dict[str, ssl.SSLContext] = {}
+        self._runner: Optional[web.AppRunner] = None
+        self._site: Optional[web.TCPSite] = None
+        self._is_running: bool = False
         
         if config.ca_cert_path and config.ca_key_path:
             self._ca = CertificateAuthority(
@@ -259,8 +262,16 @@ class ProxyServer:
                     text=f"Proxy error: {str(e)}"
                 )
     
+    @property
+    def is_running(self) -> bool:
+        """Check if the proxy server is running."""
+        return self._is_running
+
     async def start(self) -> None:
         """Start the proxy server."""
+        if self._is_running:
+            raise RuntimeError("Proxy server is already running")
+
         app = web.Application()
         app.router.add_route("*", "/{path:.*}", self._handle_request)
         
@@ -274,5 +285,25 @@ class ProxyServer:
         )
         
         await site.start()
+
+        self._runner = runner
+        self._site = site
+        self._is_running = True
         logger.info(
             f"Proxy server running on {self.config.host}:{self.config.port}")
+
+    async def stop(self) -> None:
+        """Stop the proxy server."""
+        if not self._is_running:
+            return
+
+        if self._site:
+            await self._site.stop()
+            self._site = None
+
+        if self._runner:
+            await self._runner.cleanup()
+            self._runner = None
+
+        self._is_running = False
+        logger.info("Proxy server stopped")

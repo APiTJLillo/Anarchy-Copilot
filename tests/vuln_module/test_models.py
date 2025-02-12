@@ -2,7 +2,7 @@
 
 import pytest
 from datetime import datetime
-from anarchy_copilot.vuln_module.models import (
+from vuln_module.models import (
     VulnResult,
     VulnSeverity,
     PayloadType,

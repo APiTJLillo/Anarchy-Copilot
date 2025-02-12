@@ -1,0 +1,23 @@
+{
+    "include": [
+        "anarchy_copilot",
+        "tests",
+        "examples",
+        "recon_module",
+        "vuln_module"
+    ],
+    "exclude": [
+        "**/node_modules",
+        "**/__pycache__"
+    ],
+    "reportMissingImports": false,
+    "reportMissingTypeStubs": false,
+    "pythonVersion": "3.8",
+    "typeCheckingMode": "basic",
+    "useLibraryCodeForTypes": true,
+    "venvPath": "/app",
+    "extraPaths": [
+        ".",
+        "./anarchy-copilot"
+    ]
+}

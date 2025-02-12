@@ -10,7 +10,7 @@ from pathlib import Path
 import tempfile
 import os
 
-from anarchy_copilot.api import create_app
+from api import create_app
 
 # Test constants
 TEST_API_KEY = "test_api_key_123"
@@ -38,9 +38,11 @@ def test_env() -> Dict[str, Any]:
     }
 
 @pytest.fixture(scope="session")
-def app(test_env: Dict[str, Any]) -> FastAPI:
+def app() -> FastAPI:
     """Create FastAPI test application."""
-    return create_app(test_env)
+    # Use the already initialized app instance
+    from api import app as test_app
+    return test_app
 
 @pytest.fixture
 def client(app: FastAPI) -> Generator[TestClient, None, None]:

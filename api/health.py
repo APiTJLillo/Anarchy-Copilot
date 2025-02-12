@@ -6,8 +6,8 @@ import psutil
 import os
 from datetime import datetime, timezone
 
-from ..vuln_module.vuln_manager import VulnManager
-from ..version import __version__
+from vuln_module.vuln_manager import VulnManager
+from api import __version__
 
 router = APIRouter()
 
@@ -97,7 +97,10 @@ async def detailed_health_check(response: Response) -> Dict[str, Any]:
         "application": get_application_status(),
         "dependencies": dependencies,
         "managers": {
-            "vulnerability": VulnManager().get_status()
+            "vulnerability": {
+                "active_scanners": len(VulnManager().active_scans),
+                "supported_scanners": list(VulnManager().DEFAULT_SCANNERS.keys())
+            }
         }
     }
 

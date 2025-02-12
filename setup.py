@@ -3,12 +3,16 @@
 import os
 from setuptools import setup, find_packages
 
-# Read version from __init__.py
-with open(os.path.join("anarchy_copilot", "__init__.py"), "r") as f:
-    for line in f:
-        if line.startswith("__version__"):
-            version = line.split("=")[1].strip().strip("'").strip('"')
-            break
+# Read version from version.py
+version = "0.1.0"  # Default version
+# try:
+#     with open("version.py", "r") as f:
+#         for line in f:
+#             if line.startswith("__version__"):
+#                 version = line.split("=")[1].strip().strip("'").strip('"')
+#                 break
+# except (FileNotFoundError, IOError):
+#     pass  # Use default version
 
 # Read README for long description
 with open("README.md", "r", encoding="utf-8") as f:
@@ -24,8 +28,12 @@ setup(
     author_email="info@anarchycopilot.org",
     url="https://github.com/anarchycopilot/anarchycopilot",
     packages=find_packages(include=[
-        "anarchy_copilot", 
+        "anarchy_copilot",
         "anarchy_copilot.*",
+        "api",
+        "api.*",
+        "proxy",
+        "proxy.*",
         "recon_module",
         "recon_module.*",
         "vuln_module",
@@ -60,11 +68,13 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "anarchy-copilot=anarchy_copilot.cli:main",
+            "anarchy-copilot=api.cli:main",
         ],
     },
     package_data={
         "anarchy_copilot": ["py.typed", "*.pyi", "**/*.pyi"],
+        "api": ["py.typed", "*.pyi", "**/*.pyi"],
+        "proxy": ["py.typed", "*.pyi", "**/*.pyi"],
         "recon_module": ["py.typed", "*.pyi", "**/*.pyi"],
         "vuln_module": ["py.typed", "*.pyi", "**/*.pyi"],
     },

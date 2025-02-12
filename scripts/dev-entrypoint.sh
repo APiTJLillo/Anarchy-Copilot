@@ -113,7 +113,7 @@ start_services() {
     # Start API server with debugger
     log "Starting API server with debugger on port 5678..."
     python -m debugpy --listen 0.0.0.0:5678 \
-        -m uvicorn anarchy_copilot.api:app \
+        -m uvicorn api:app \
         --host 0.0.0.0 \
         --port 8000 \
         --reload \

@@ -5,7 +5,7 @@ import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, patch
 
-from anarchy_copilot.api import app
+from api import app
 
 def test_app_initialization():
     """Test that the FastAPI app is properly initialized."""
@@ -51,7 +51,7 @@ def test_proxy_endpoints():
 @pytest.mark.asyncio
 async def test_shutdown_handler():
     """Test that the shutdown handler properly cleans up resources."""
-    with patch("anarchy_copilot.api.proxy.proxy_server") as mock_proxy:
+    with patch("api.proxy.proxy_server") as mock_proxy:
         # Configure mock proxy
         mock_proxy.stop = AsyncMock()
         

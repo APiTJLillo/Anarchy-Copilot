@@ -19,7 +19,8 @@ from .scanner import (
 class VulnManager:
     """Manages vulnerability discovery operations."""
 
-    DEFAULT_SCANNERS = {
+    # Map of scanner names to scanner classes
+    DEFAULT_SCANNERS: Dict[str, Type[BaseVulnScanner]] = {
         "nuclei": NucleiScanner,
     }
 

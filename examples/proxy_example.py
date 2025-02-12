@@ -9,7 +9,7 @@ import logging
 import sys
 from pathlib import Path
 
-from anarchy_copilot.proxy import (
+from proxy import (
     ProxyConfig,
     ProxyServer,
     RequestInterceptor,

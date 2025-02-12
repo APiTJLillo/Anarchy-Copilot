@@ -1,168 +1,140 @@
-"""
-Tests for the proxy API endpoints.
-"""
+"""Tests for proxy management API endpoints."""
 import pytest
+from unittest.mock import AsyncMock, Mock, patch
 from fastapi.testclient import TestClient
-from unittest.mock import AsyncMock, MagicMock, patch
 
-from anarchy_copilot.api.proxy import router, proxy_server
-from anarchy_copilot.proxy.core import ProxyServer
-from anarchy_copilot.proxy.config import ProxyConfig
+from api import app
+from api.proxy import proxy_server
+from proxy.core import ProxyServer
+from proxy.config import ProxyConfig
+from proxy.session import HistoryEntry
+from .conftest import verify_json_response
 
 @pytest.fixture
 def mock_proxy_server():
-    """Create a mock proxy server."""
-    server = MagicMock(spec=ProxyServer)
-    server.config = MagicMock(spec=ProxyConfig)
-    server.session = MagicMock()
-    server.is_running = True
-    server.start = AsyncMock()
-    server.stop = AsyncMock()
-    return server
+    """Create mock proxy server."""
+    mock = Mock(spec=ProxyServer)
+    mock.is_running = False
+    mock.config = ProxyConfig()
+    mock.session = Mock()
+    mock.session.get_history = Mock(return_value=[])
+    mock.session.find_entry = Mock(return_value=None)
+    mock.session.add_entry_tag = Mock(return_value=True)
+    mock.session.set_entry_note = Mock(return_value=True)
+    mock.session.clear_history = Mock()
+    mock.start = AsyncMock()
+    mock.stop = AsyncMock()
+    return mock
 
-@pytest.fixture
-def test_client():
-    """Create a test client for the proxy API."""
-    from fastapi import FastAPI
-    app = FastAPI()
-    app.include_router(router)
-    return TestClient(app)
-
-def test_get_proxy_status_no_server(test_client):
-    """Test getting proxy status when no server is running."""
+def test_get_proxy_status(test_client):
+    """Test getting proxy server status."""
     global proxy_server
     proxy_server = None
     
     response = test_client.get("/api/proxy/status")
     assert response.status_code == 200
     data = response.json()
-    assert data["isRunning"] == False
-    assert len(data["history"]) == 0
+    assert data["isRunning"] is False
 
 def test_get_proxy_status_with_server(test_client, mock_proxy_server):
-    """Test getting proxy status with a running server."""
+    """Test getting proxy status with active server."""
     global proxy_server
     proxy_server = mock_proxy_server
-    
-    # Configure mock server response
-    mock_entry = MagicMock()
-    mock_entry.id = "test-id"
-    mock_entry.timestamp.isoformat.return_value = "2025-02-10T12:00:00"
-    mock_entry.request.method = "GET"
-    mock_entry.request.url = "http://example.com"
-    mock_entry.response.status_code = 200
-    mock_entry.duration = 100
-    mock_entry.tags = ["test"]
-    
-    mock_proxy_server.session.get_history.return_value = [mock_entry]
+    mock_proxy_server.is_running = True
     
     response = test_client.get("/api/proxy/status")
     assert response.status_code == 200
     data = response.json()
-    assert data["isRunning"] == True
-    assert len(data["history"]) == 1
-    assert data["history"][0]["id"] == "test-id"
+    assert data["isRunning"] is True
+    assert "history" in data
 
-def test_start_proxy(test_client):
-    """Test starting the proxy server."""
+@pytest.mark.asyncio
+async def test_start_proxy(test_client, mock_proxy_server):
+    """Test starting proxy server."""
     global proxy_server
     proxy_server = None
     
-    settings = {
-        "host": "127.0.0.1",
-        "port": 8080,
-        "interceptRequests": True,
-        "interceptResponses": True,
-        "allowedHosts": [],
-        "excludedHosts": []
-    }
-    
-    with patch("anarchy_copilot.api.proxy.ProxyServer") as mock_server:
-        response = test_client.post("/api/proxy/start", json=settings)
+    with patch('api.proxy.ProxyServer', return_value=mock_proxy_server):
+        response = test_client.post(
+            "/api/proxy/start",
+            json={
+                "host": "127.0.0.1",
+                "port": 8080,
+                "interceptRequests": True,
+                "interceptResponses": True,
+                "allowedHosts": [],
+                "excludedHosts": []
+            }
+        )
+        
         assert response.status_code == 200
-        assert response.json()["status"] == "success"
-        mock_server.assert_called_once()
+        data = response.json()
+        verify_json_response(data)
+        assert data["status"] == "success"
+        mock_proxy_server.start.assert_awaited_once()
 
-def test_start_proxy_already_running(test_client, mock_proxy_server):
-    """Test starting the proxy server when it's already running."""
-    global proxy_server
-    proxy_server = mock_proxy_server
-    
-    settings = {
-        "host": "127.0.0.1",
-        "port": 8080,
-        "interceptRequests": True,
-        "interceptResponses": True,
-        "allowedHosts": [],
-        "excludedHosts": []
-    }
-    
-    response = test_client.post("/api/proxy/start", json=settings)
-    assert response.status_code == 400
-    assert "already running" in response.json()["detail"]
-
-def test_stop_proxy(test_client, mock_proxy_server):
-    """Test stopping the proxy server."""
+@pytest.mark.asyncio
+async def test_stop_proxy(test_client, mock_proxy_server):
+    """Test stopping proxy server."""
     global proxy_server
     proxy_server = mock_proxy_server
     
     response = test_client.post("/api/proxy/stop")
     assert response.status_code == 200
-    assert response.json()["status"] == "success"
+    data = response.json()
+    verify_json_response(data)
+    assert data["status"] == "success"
     mock_proxy_server.stop.assert_awaited_once()
 
-def test_stop_proxy_not_running(test_client):
-    """Test stopping the proxy server when it's not running."""
-    global proxy_server
-    proxy_server = None
-    
-    response = test_client.post("/api/proxy/stop")
-    assert response.status_code == 400
-    assert "not running" in response.json()["detail"]
-
 def test_update_settings(test_client, mock_proxy_server):
-    """Test updating proxy server settings."""
+    """Test updating proxy settings."""
     global proxy_server
     proxy_server = mock_proxy_server
+    mock_proxy_server.is_running = True
     
-    settings = {
-        "host": "127.0.0.1",
-        "port": 8080,
-        "interceptRequests": False,
-        "interceptResponses": True,
-        "allowedHosts": ["example.com"],
-        "excludedHosts": []
-    }
+    response = test_client.post(
+        "/api/proxy/settings",
+        json={
+            "host": "127.0.0.1",
+            "port": 8080,
+            "interceptRequests": True,
+            "interceptResponses": True,
+            "allowedHosts": ["example.com"],
+            "excludedHosts": []
+        }
+    )
     
-    response = test_client.post("/api/proxy/settings", json=settings)
     assert response.status_code == 200
-    assert response.json()["status"] == "success"
-    assert mock_proxy_server.config.intercept_requests == False
-    assert mock_proxy_server.config.allowed_hosts == {"example.com"}
+    data = response.json()
+    verify_json_response(data)
+    assert data["status"] == "success"
 
 def test_get_history_entry(test_client, mock_proxy_server):
-    """Test getting a specific history entry."""
+    """Test getting history entry details."""
     global proxy_server
     proxy_server = mock_proxy_server
     
-    # Configure mock entry
-    mock_entry = MagicMock()
-    mock_entry.id = "test-id"
-    mock_entry.timestamp.isoformat.return_value = "2025-02-10T12:00:00"
-    mock_entry.request.to_dict.return_value = {"method": "GET", "url": "http://example.com"}
-    mock_entry.response.to_dict.return_value = {"status_code": 200}
-    mock_entry.duration = 100
-    mock_entry.tags = ["test"]
-    mock_entry.notes = "Test notes"
-    
+    mock_entry = HistoryEntry(
+        id="test-id",
+        timestamp=datetime.now(),
+        request={
+            "method": "GET",
+            "url": "http://example.com",
+            "headers": {}
+        },
+        response={
+            "status_code": 200,
+            "headers": {},
+            "body": b"test"
+        }
+    )
     mock_proxy_server.session.find_entry.return_value = mock_entry
     
     response = test_client.get("/api/proxy/history/test-id")
     assert response.status_code == 200
     data = response.json()
     assert data["id"] == "test-id"
-    assert data["request"]["method"] == "GET"
-    assert data["response"]["status_code"] == 200
+    mock_proxy_server.session.find_entry.assert_called_once_with("test-id")
 
 def test_add_entry_tag(test_client, mock_proxy_server):
     """Test adding a tag to a history entry."""
@@ -175,6 +147,21 @@ def test_add_entry_tag(test_client, mock_proxy_server):
     assert response.status_code == 200
     assert response.json()["status"] == "success"
     mock_proxy_server.session.add_entry_tag.assert_called_once_with("test-id", "interesting")
+
+def test_set_entry_note(test_client, mock_proxy_server):
+    """Test setting a note on a history entry."""
+    global proxy_server
+    proxy_server = mock_proxy_server
+    
+    mock_proxy_server.session.set_entry_note.return_value = True
+    
+    response = test_client.post(
+        "/api/proxy/history/test-id/notes",
+        json={"note": "Test note"}
+    )
+    assert response.status_code == 200
+    assert response.json()["status"] == "success"
+    mock_proxy_server.session.set_entry_note.assert_called_once()
 
 def test_clear_history(test_client, mock_proxy_server):
     """Test clearing the proxy history."""

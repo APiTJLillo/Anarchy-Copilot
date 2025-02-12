@@ -7,7 +7,7 @@ import psutil
 import os
 from datetime import datetime, timezone
 
-from anarchy_copilot.api.health import (
+from api.health import (
     router,
     get_system_status,
     get_application_status,

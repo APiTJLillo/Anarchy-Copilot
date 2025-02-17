@@ -86,7 +86,7 @@ class RateLimiter:
             if record.timestamp > cutoff
         ]
 
-    def can_scan(self, target: str, tool: str) -> tuple[bool, Optional[str]]:
+    def can_scan(self, target: str, tool: str) -> "tuple[bool, Optional[str]]":
         """Check if a scan can be started."""
         tool_limits = self.DEFAULT_LIMITS.get(tool, self.DEFAULT_LIMITS["default"])
         requests_per_minute, min_interval, max_concurrent = tool_limits

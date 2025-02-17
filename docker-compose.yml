@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   test:
     build:
@@ -14,6 +12,8 @@ services:
       - PYTHONUNBUFFERED=1
       - PYTEST_ADDOPTS="-v"
     command: python -m pytest tests/ -v
+    networks:
+      - anarchy
 
   dev:
     build:
@@ -25,11 +25,23 @@ services:
       - dev-cache:/root/.cache
     ports:
       - "8000:8000" # API
+      - "5678:5678" # Debug
     environment:
       - PYTHONPATH=/app:/app/anarchy-copilot
       - PYTEST_ADDOPTS="-v --import-mode=append"
       - NUCLEI_TEMPLATES=/root/.nuclei/templates
-    command: python -m uvicorn api:app --host 0.0.0.0 --port 8000 --reload
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+      - DISABLE_HTTPS=1 # Explicitly disable HTTPS
+    networks:
+      - anarchy
+    command: [ "/usr/local/bin/dev-entrypoint.sh", "start" ]
+    healthcheck:
+      test: [ "CMD", "/usr/local/bin/healthcheck.sh" ]
+      interval: 5s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
 
   proxy:
     build:
@@ -41,16 +53,21 @@ services:
       - proxy-data:/app/data
     ports:
       - "8080:8080" # Proxy
+      - "5679:5678" # Debug
     environment:
       - PYTHONPATH=/app:/app/anarchy-copilot
       - PROXY_HOST=0.0.0.0
       - PROXY_PORT=8080
       - CA_CERT_PATH=/app/certs/ca.crt
       - CA_KEY_PATH=/app/certs/ca.key
+      - PYTHONDONTWRITEBYTECODE=1
+      - PYTHONUNBUFFERED=1
+    networks:
+      - anarchy
     command: >
       sh -c "
-        mkdir -p /app/certs /app/data &&
-        python -m examples.proxy_example
+        chmod +x /usr/local/bin/dev-entrypoint.sh &&
+        /usr/local/bin/dev-entrypoint.sh start
       "
 
   frontend:
@@ -64,12 +81,16 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=development
-      - REACT_APP_API_URL=http://localhost:8000
-      - REACT_APP_PROXY_URL=http://localhost:8080
+      - REACT_APP_API_BASE_URL=http://dev:8000 # Use Docker DNS resolution
+      - REACT_APP_PROXY_URL=http://proxy:8080 # Use Docker DNS resolution
       - WDS_SOCKET_PORT=3000
     depends_on:
-      - dev
-      - proxy
+      dev:
+        condition: service_healthy
+      proxy:
+        condition: service_started
+    networks:
+      - anarchy
 
   nuclei:
     image: projectdiscovery/nuclei:v2.9.0
@@ -77,6 +98,8 @@ services:
       - ~/.nuclei:/root/.nuclei
       - ./tests/data/nuclei_templates:/templates
     command: -update-templates
+    networks:
+      - anarchy
 
   validate:
     build:
@@ -90,6 +113,12 @@ services:
       - PYTHONPATH=/app:/app/anarchy-copilot
       - PYTEST_ADDOPTS="-v --import-mode=append"
     command: python -m pytest tests.tools.validate_templates -v --import-mode=append
+    networks:
+      - anarchy
+
+networks:
+  anarchy:
+    driver: bridge
 
 volumes:
   test-cache:

@@ -6,6 +6,7 @@ import sqlalchemy.orm  # type: ignore
 from sqlalchemy import desc  # type: ignore
 
 from models import ReconResult
+from typing import Dict
 
 class ReconDatabase:
     """Handles database operations for reconnaissance results."""
@@ -114,11 +115,11 @@ class ReconDatabase:
         # Extract changes from metadata
         changes = []
         for result in results:
-            if result.metadata and "changes" in result.metadata:
+            metadata: Dict[str, Any] = result.metadata if isinstance(result.metadata, dict) else {}
+            if "changes" in metadata:
                 changes.append({
-                    "timestamp": result.end_time,
                     "scan_type": result.scan_type,
-                    "changes": result.metadata["changes"]
+                    "changes": metadata["changes"]
                 })
         
         return changes

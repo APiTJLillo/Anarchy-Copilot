@@ -1,221 +1,243 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
   Box,
+  Grid,
   Paper,
   Typography,
-  List,
-  ListItem,
-  ListItemText,
-  Chip,
-  IconButton,
-  Switch,
-  FormControlLabel,
-  Grid,
+  Button,
+  CircularProgress,
+  Alert,
   Tabs,
   Tab,
-  Button,
 } from '@mui/material';
-import PlayArrowIcon from '@mui/icons-material/PlayArrow';
-import StopIcon from '@mui/icons-material/Stop';
-import EditIcon from '@mui/icons-material/Edit';
-import InfoIcon from '@mui/icons-material/Info';
+import { InterceptorView } from './components/proxy/InterceptorView';
+import { WebSocketView } from './components/proxy/WebSocketView';
+import { ProxyProvider } from './components/proxy/ProxyContext';
+import AnalysisResults from './components/proxy/AnalysisResults';
+import axios from 'axios';
+import { API_BASE_URL } from './config';
 
-interface ProxyRequest {
-  id: string;
-  timestamp: string;
-  method: string;
-  url: string;
-  status?: number;
-  duration?: number;
-  tags: string[];
-}
-
-interface ProxyState {
+interface ProxyStatus {
   isRunning: boolean;
   interceptRequests: boolean;
   interceptResponses: boolean;
-  history: ProxyRequest[];
+  allowedHosts: string[];
+  excludedHosts: string[];
+  history: any[];
 }
 
-export const ProxyDashboard: React.FC = () => {
-  const [proxyState, setProxyState] = useState<ProxyState>({
-    isRunning: false,
-    interceptRequests: true,
-    interceptResponses: true,
-    history: [],
-  });
+interface AnalysisResult {
+  requestId: string;
+  ruleName: string;
+  severity: string;
+  description: string;
+  evidence: string;
+  timestamp: string;
+}
 
-  const [selectedTab, setSelectedTab] = useState(0);
+interface TabPanelProps {
+  children?: React.ReactNode;
+  index: number;
+  value: number;
+}
 
-  // Simulate fetching proxy status periodically
-  useEffect(() => {
-    const interval = setInterval(() => {
-      // In real implementation, fetch from API
-      fetch('/api/proxy/status')
-        .then(res => res.json())
-        .then(data => setProxyState(data))
-        .catch(err => console.error('Failed to fetch proxy status:', err));
-    }, 1000);
-    return () => clearInterval(interval);
-  }, []);
-
-  const handleToggleProxy = () => {
-    const newState = !proxyState.isRunning;
-    // In real implementation, call API to start/stop proxy
-    fetch('/api/proxy/' + (newState ? 'start' : 'stop'), { method: 'POST' })
-      .then(() => setProxyState(prev => ({ ...prev, isRunning: newState })))
-      .catch(err => console.error('Failed to toggle proxy:', err));
-  };
-
-  const handleInterceptToggle = (type: 'requests' | 'responses') => {
-    const updateField = type === 'requests' ? 'interceptRequests' : 'interceptResponses';
-    // In real implementation, call API to update interception settings
-    setProxyState(prev => ({ ...prev, [updateField]: !prev[updateField] }));
-  };
-
-  const handleEditRequest = (requestId: string) => {
-    // In real implementation, open request editor dialog
-    console.log('Edit request:', requestId);
-  };
-
-  const handleViewDetails = (requestId: string) => {
-    // In real implementation, open request details dialog
-    console.log('View details:', requestId);
-  };
+const TabPanel: React.FC<TabPanelProps> = (props) => {
+  const { children, value, index, ...other } = props;
 
   return (
-    <Box p={3}>
-      <Paper elevation={2}>
-        <Box p={2}>
-          <Grid container spacing={2} alignItems="center">
-            <Grid item>
-              <Typography variant="h6">Proxy Status</Typography>
-            </Grid>
-            <Grid item>
-              <Button
-                variant="contained"
-                color={proxyState.isRunning ? "error" : "success"}
-                startIcon={proxyState.isRunning ? <StopIcon /> : <PlayArrowIcon />}
-                onClick={handleToggleProxy}
-              >
-                {proxyState.isRunning ? "Stop Proxy" : "Start Proxy"}
-              </Button>
-            </Grid>
-            <Grid item>
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={proxyState.interceptRequests}
-                    onChange={() => handleInterceptToggle('requests')}
-                  />
-                }
-                label="Intercept Requests"
-              />
-            </Grid>
-            <Grid item>
-              <FormControlLabel
-                control={
-                  <Switch
-                    checked={proxyState.interceptResponses}
-                    onChange={() => handleInterceptToggle('responses')}
-                  />
-                }
-                label="Intercept Responses"
-              />
-            </Grid>
-          </Grid>
-        </Box>
-      </Paper>
-
-      <Box mt={3}>
-        <Paper elevation={2}>
-          <Tabs value={selectedTab} onChange={(_, val) => setSelectedTab(val)}>
-            <Tab label="History" />
-            <Tab label="Intercepted" />
-            <Tab label="Settings" />
-          </Tabs>
-
-          <Box p={2}>
-            {selectedTab === 0 && (
-              <List>
-                {proxyState.history.map((request) => (
-                  <ListItem
-                    key={request.id}
-                    secondaryAction={
-                      <Box>
-                        <IconButton
-                          edge="end"
-                          aria-label="edit"
-                          onClick={() => handleEditRequest(request.id)}
-                        >
-                          <EditIcon />
-                        </IconButton>
-                        <IconButton
-                          edge="end"
-                          aria-label="details"
-                          onClick={() => handleViewDetails(request.id)}
-                        >
-                          <InfoIcon />
-                        </IconButton>
-                      </Box>
-                    }
-                  >
-                    <ListItemText
-                      primary={
-                        <Box display="flex" alignItems="center" gap={1}>
-                          <Chip
-                            label={request.method}
-                            color={request.method === 'GET' ? 'primary' : 'secondary'}
-                            size="small"
-                          />
-                          <Typography>{request.url}</Typography>
-                        </Box>
-                      }
-                      secondary={
-                        <Box display="flex" alignItems="center" gap={1}>
-                          {request.status && (
-                            <Chip
-                              label={request.status}
-                              color={request.status < 400 ? 'success' : 'error'}
-                              size="small"
-                            />
-                          )}
-                          {request.duration && (
-                            <Typography variant="caption">
-                              {request.duration}ms
-                            </Typography>
-                          )}
-                          {request.tags.map((tag) => (
-                            <Chip
-                              key={tag}
-                              label={tag}
-                              variant="outlined"
-                              size="small"
-                            />
-                          ))}
-                        </Box>
-                      }
-                    />
-                  </ListItem>
-                ))}
-              </List>
-            )}
-
-            {selectedTab === 1 && (
-              <Typography variant="body1">No requests currently intercepted</Typography>
-            )}
-
-            {selectedTab === 2 && (
-              <Box p={2}>
-                <Typography variant="h6">Proxy Settings</Typography>
-                {/* Add proxy settings form here */}
-              </Box>
-            )}
-          </Box>
-        </Paper>
-      </Box>
-    </Box>
+    <div
+      role="tabpanel"
+      hidden={value !== index}
+      id={`proxy-tabpanel-${index}`}
+      aria-labelledby={`proxy-tab-${index}`}
+      {...other}
+    >
+      <div style={{ padding: value === index ? 24 : 0, display: value === index ? 'block' : 'none' }}>
+        {children}
+      </div>
+    </div>
   );
 };
 
-export default ProxyDashboard;
+export const ProxyDashboard: React.FC = () => {
+  const [status, setStatus] = useState<ProxyStatus | null>(null);
+  const [analysisResults, setAnalysisResults] = useState<AnalysisResult[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [tabValue, setTabValue] = useState(0);
+
+  const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
+    setTabValue(newValue);
+  };
+
+  const fetchStatus = useCallback(async () => {
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/proxy/status`);
+      setStatus(response.data);
+      setError(null);
+    } catch (err) {
+      setError('Failed to fetch proxy status');
+      console.error(err);
+    }
+  }, []);
+
+  const fetchAnalysisResults = useCallback(async () => {
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/proxy/analysis/results`);
+      setAnalysisResults(response.data);
+      setError(null);
+    } catch (err) {
+      setError('Failed to fetch analysis results');
+      console.error(err);
+    }
+  }, []);
+
+  const startProxy = useCallback(async () => {
+    try {
+      await axios.post(`${API_BASE_URL}/api/proxy/start`, {
+        host: "127.0.0.1",
+        port: 8080,
+        interceptRequests: true,
+        interceptResponses: true,
+        allowedHosts: [],
+        excludedHosts: []
+      });
+      await fetchStatus();
+      setError(null);
+    } catch (err) {
+      setError('Failed to start proxy');
+      console.error(err);
+    }
+  }, [fetchStatus]);
+
+  const stopProxy = useCallback(async () => {
+    try {
+      await axios.post(`${API_BASE_URL}/api/proxy/stop`);
+      await fetchStatus();
+      setError(null);
+    } catch (err) {
+      setError('Failed to stop proxy');
+      console.error(err);
+    }
+  }, [fetchStatus]);
+
+  const clearAnalysisResults = useCallback(async () => {
+    try {
+      await axios.delete(`${API_BASE_URL}/api/proxy/analysis/results`);
+      setAnalysisResults([]);
+      setError(null);
+    } catch (err) {
+      setError('Failed to clear analysis results');
+      console.error(err);
+    }
+  }, []);
+
+  useEffect(() => {
+    const init = async () => {
+      setLoading(true);
+      await fetchStatus();
+      await fetchAnalysisResults();
+      setLoading(false);
+    };
+    init();
+
+    // Poll for updates
+    const intervalId = setInterval(() => {
+      fetchStatus();
+      fetchAnalysisResults();
+    }, 5000);
+
+    return () => clearInterval(intervalId);
+  }, [fetchStatus, fetchAnalysisResults]);
+
+  if (loading) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+        <CircularProgress />
+      </Box>
+    );
+  }
+
+  return (
+    <Box sx={{ p: 3 }}>
+      {error && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {error}
+        </Alert>
+      )}
+
+      <Grid container spacing={3}>
+        {/* Status and Controls */}
+        <Grid item xs={12}>
+          <Paper sx={{ p: 2 }}>
+            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+              <Typography variant="h6">
+                Proxy Status: {status?.isRunning ? 'Running' : 'Stopped'}
+              </Typography>
+              <Button
+                variant="contained"
+                color={status?.isRunning ? 'error' : 'primary'}
+                onClick={status?.isRunning ? stopProxy : startProxy}
+              >
+                {status?.isRunning ? 'Stop Proxy' : 'Start Proxy'}
+              </Button>
+              <Button
+                variant="outlined"
+                onClick={clearAnalysisResults}
+                disabled={!status?.isRunning}
+              >
+                Clear Analysis Results
+              </Button>
+            </Box>
+          </Paper>
+        </Grid>
+
+        {/* Main Content */}
+        {status?.isRunning && (
+          <Grid item xs={12}>
+            <Paper>
+              <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+                <Tabs value={tabValue} onChange={handleTabChange} aria-label="proxy tabs">
+                  <Tab label="HTTP/HTTPS" />
+                  <Tab label="WebSocket" />
+                  <Tab label="Analysis" />
+                </Tabs>
+              </Box>
+
+              <TabPanel value={tabValue} index={0}>
+                <Grid container spacing={3}>
+                  <Grid item xs={12}>
+                    <ProxyProvider>
+                      <Paper sx={{ p: 2 }}>
+                        <Typography variant="body1" align="center">
+                          Waiting for requests to intercept...
+                          The interceptor will open automatically when requests are captured.
+                        </Typography>
+                      </Paper>
+                    </ProxyProvider>
+                  </Grid>
+                </Grid>
+              </TabPanel>
+
+              <TabPanel value={tabValue} index={1}>
+                <Grid container spacing={3}>
+                  <Grid item xs={12}>
+                    <WebSocketView />
+                  </Grid>
+                </Grid>
+              </TabPanel>
+
+              <TabPanel value={tabValue} index={2}>
+                <Grid container spacing={3}>
+                  <Grid item xs={12}>
+                    <AnalysisResults results={analysisResults} />
+                  </Grid>
+                </Grid>
+              </TabPanel>
+            </Paper>
+          </Grid>
+        )}
+      </Grid>
+    </Box>
+  );
+};

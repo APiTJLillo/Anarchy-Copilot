@@ -3,7 +3,7 @@
 import asyncio
 from typing import List, Dict, Any, Tuple, cast
 from .types import VulnFinding, VulnScanResult
-from .base import BaseReconTool
+from recon_module.base import BaseReconTool
 from recon_module.common.progress import ReconProgress
 from recon_module.rate_limiter import RateLimiter
 

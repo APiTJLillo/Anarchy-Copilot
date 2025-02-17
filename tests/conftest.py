@@ -73,6 +73,18 @@ def temp_test_dir() -> Generator[Path, None, None]:
         shutil.rmtree(str(temp_dir))
 
 @pytest.fixture
+def test_app():
+    """Create test application."""
+    from api import create_app
+    return create_app({"testing": True, "debug": True})
+
+@pytest.fixture
+def test_client(test_app):
+    """Create test client."""
+    from fastapi.testclient import TestClient
+    return TestClient(test_app)
+
+@pytest.fixture
 async def dummy_config() -> Dict[str, Any]:
     """Create dummy test configuration."""
     return {

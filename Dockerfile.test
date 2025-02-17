@@ -9,6 +9,10 @@ RUN apt-get update && apt-get install -y \
     gcc \
     nmap \
     chromium \
+    iproute2 \
+    procps \
+    psmisc \
+    lsof \
     && rm -rf /var/lib/apt/lists/*
 
 # Install nuclei

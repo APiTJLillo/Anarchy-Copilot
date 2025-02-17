@@ -107,7 +107,7 @@ def test_template_rendering(test_data: dict, output_dir: Path):
         # Verify statistics
         total_tests_tag = soup.find("span", text="Total Tests:")
         if total_tests_tag:
-            next_span = total_tests_tag.find_next_sibling("span")
+            next_span = total_tests_tag.find_next("span")
             if next_span:
                 total_tests = next_span.text.strip()
                 assert total_tests == "100"

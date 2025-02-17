@@ -8,6 +8,7 @@ import json
 from .orchestrator import ScanOrchestrator
 from .database import ReconDatabase
 from .models import ReconResult
+from .recon_manager import ReconManager
 
 T = TypeVar('T')
 
@@ -63,9 +64,9 @@ class ReconSchedule:
 class ReconScheduler:
     """Manages scheduled reconnaissance tasks."""
 
-    def __init__(self, orchestrator: ScanOrchestrator, db: ReconDatabase):
-        """Initialize scheduler with orchestrator and database."""
-        self.orchestrator = orchestrator
+    def __init__(self, manager: ReconManager, db: ReconDatabase):
+        """Initialize scheduler with recon manager and database."""
+        self.manager = manager
         self.db = db
         self.schedules: Dict[str, ReconSchedule] = {}
         self._running = False
@@ -156,19 +157,24 @@ class ReconScheduler:
         """Execute a scheduled scan."""
         try:
             # Run the scan
-            results = await self.orchestrator.full_scan(domain)
+            results = await self.manager.full_scan(domain)
             
             # Compare with previous results
             if schedule.last_run:
                 previous_results = await self.db.get_results_since(
                     domain, schedule.last_run
                 )
-                changes = self._analyze_changes(previous_results, results)
-                # Store changes in metadata
+                # Convert ReconResult objects to dictionaries
+                previous_dicts = [result.to_dict() for result in previous_results]
+                # Add scan_type to each dictionary since to_dict() doesn't include it
+                for result in previous_dicts:
+                    result["scan_type"] = previous_results[previous_dicts.index(result)].scan_type
+                changes = self._analyze_changes(previous_dicts, results)
+                # Store changes in metadata for each result
                 for result in results:
-                    if not result.metadata:
-                        result.metadata = {}
-                    result.metadata["changes"] = changes.get(result.scan_type, {})
+                    if "metadata" not in result:
+                        result["metadata"] = {}
+                    result["metadata"]["changes"] = changes.get(result.get("scan_type", "unknown"), {})
             
             # Update schedule tracking
             schedule.last_run = datetime.now()
@@ -187,15 +193,15 @@ class ReconScheduler:
 
     def _analyze_changes(
         self,
-        previous: List[ReconResult],
-        current: List[ReconResult]
+        previous: List[Dict[str, Any]],
+        current: List[Dict[str, Any]]
     ) -> Dict[str, Dict[str, Any]]:
         """Analyze changes between scan results."""
         changes: Dict[str, Dict[str, Any]] = {}
         
         # Group results by scan type
-        prev_by_type = {r.scan_type: r for r in previous}
-        curr_by_type = {r.scan_type: r for r in current}
+        prev_by_type = {r["scan_type"]: r for r in previous}
+        curr_by_type = {r["scan_type"]: r for r in current}
         
         # Compare each scan type
         for scan_type in set(prev_by_type.keys()) | set(curr_by_type.keys()):
@@ -205,29 +211,29 @@ class ReconScheduler:
             if not prev_result:
                 changes[scan_type] = {
                     "type": "new",
-                    "details": curr_result.results if curr_result else None
+                    "details": curr_result["results"] if curr_result else None
                 }
             elif not curr_result:
                 changes[scan_type] = {
                     "type": "removed",
-                    "details": prev_result.results
+                    "details": prev_result["results"]
                 }
             else:
                 # Compare results based on scan type
                 if scan_type == "subdomain_scan":
                     changes[scan_type] = self._compare_subdomains(
-                        cast(ScanDict, prev_result.results),
-                        cast(ScanDict, curr_result.results)
+                        cast(ScanDict, prev_result["results"]),
+                        cast(ScanDict, curr_result["results"])
                     )
                 elif scan_type == "port_scan":
                     changes[scan_type] = self._compare_ports(
-                        cast(ScanDict, prev_result.results),
-                        cast(ScanDict, curr_result.results)
+                        cast(ScanDict, prev_result["results"]),
+                        cast(ScanDict, curr_result["results"])
                     )
                 elif scan_type in ["web_scan", "vuln_scan"]:
                     changes[scan_type] = self._compare_endpoints(
-                        cast(ScanDict, prev_result.results),
-                        cast(ScanDict, curr_result.results)
+                        cast(ScanDict, prev_result["results"]),
+                        cast(ScanDict, curr_result["results"])
                     )
         
         return changes

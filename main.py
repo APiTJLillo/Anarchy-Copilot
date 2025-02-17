@@ -1,25 +1,78 @@
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
-from fastapi import Depends
+import logging
+import typing
 
 from recon_module.recon_manager import ReconManager
-from models import Project, User, ReconResult
-from database import engine, get_db
+from models import ReconResult
+from database import get_db
+from api.proxy import router as proxy_router
+from api.websocket import router as websocket_router
+from api import create_app
 
-app = FastAPI()
+import uvicorn
 
-# Configure CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://frontend:3000"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+# Configure logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+logger = logging.getLogger(__name__)
+
+def create_and_configure_app():
+    """Create and configure FastAPI application with enhanced logging."""
+    logger.info("Starting application creation")
+    
+    # Create fresh app instance
+    # Create base app with minimal config
+    app = create_app({
+        "debug": True, 
+        "cors_origins": ["http://localhost:3000"]
+    })
+
+    logger.info("Base app created")
+
+    # Add routers
+    logger.info("Adding routers")
+    app.include_router(proxy_router, prefix="/api/proxy")
+    app.include_router(websocket_router, prefix="/api/proxy/websocket")
+
+    # Add diagnostic routes
+    @app.get("/api/health")
+    async def health_check():
+        """Basic health check endpoint."""
+        return {"status": "healthy"}
+    
+    @app.get("/api/debug/routes")
+    async def list_routes():
+        """List all registered routes."""
+        return {
+            "routes": [str(route) for route in app.routes],
+            "count": len(app.routes)
+        }
+
+    logger.info("Application configured successfully")
+    return app
+
+# Create the FastAPI application instance
+app = create_and_configure_app()
+
+# Register startup event
+@app.on_event("startup")
+async def startup_event():
+    """Log when application starts."""
+    logger.info("FastAPI application starting up")
+    # Test the proxy status endpoint
+    from api.proxy.endpoints import get_proxy_status
+    try:
+        status = await get_proxy_status()
+        logger.info(f"Initial proxy status: {status}")
+    except Exception as e:
+        logger.error(f"Error getting proxy status: {e}")
 
 # Store active scans
 active_scans: Dict[str, ReconManager] = {}
@@ -142,4 +195,11 @@ async def get_recon_history(
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # Ensure we bind to all interfaces when running in Docker
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
+        ssl_keyfile=None,  # Disable HTTPS to prevent HSTS redirects
+        ssl_certfile=None
+    )

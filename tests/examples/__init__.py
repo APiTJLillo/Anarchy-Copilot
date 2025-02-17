@@ -96,7 +96,7 @@ def create_example_report(
 def example_test(name: str):
     """Decorator to mark a function as an example test."""
     import pytest
-    return pytest.mark.example(name=name)
+    return pytest.mark.example(name)
 
 def slow_example():
     """Decorator to mark an example test as slow."""

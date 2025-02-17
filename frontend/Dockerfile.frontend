@@ -14,8 +14,8 @@ COPY . .
 # Set environment variables
 ENV NODE_ENV=development
 ENV PORT=3000
-ENV REACT_APP_API_URL=http://localhost:8000
-ENV REACT_APP_PROXY_URL=http://localhost:8080
+ENV REACT_APP_API_BASE_URL=http://dev:8000
+ENV REACT_APP_WS_ENDPOINT=ws://dev:8000/api/proxy/ws/intercept
 
 # Expose the port
 EXPOSE 3000

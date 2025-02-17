@@ -6,6 +6,7 @@ import os
 import tempfile
 from pathlib import Path
 import logging
+from typing import Generator
 
 # Configure test logging
 logging.basicConfig(
@@ -94,7 +95,7 @@ def test_helper() -> TestHelper:
     return TestHelper()
 
 @pytest.fixture(scope="session")
-def test_env(test_helper: TestHelper) -> Dict[str, str]:
+def test_env(test_helper: TestHelper) -> Generator[Dict[str, str], None, None]:
     """Set up test environment."""
     env_vars = test_helper.setup_test_env()
     yield env_vars
@@ -116,7 +117,7 @@ def template_dir() -> Path:
     return TEMPLATE_DIR
 
 @pytest.fixture
-def temp_dir(test_helper: TestHelper) -> Path:
+def temp_dir(test_helper: TestHelper) -> Generator[Path, None, None]:
     """Create temporary directory for test."""
     temp_dir = test_helper.create_temp_dir()
     yield temp_dir

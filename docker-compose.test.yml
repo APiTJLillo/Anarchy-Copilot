@@ -1,0 +1,60 @@
+version: '3.8'
+
+services:
+  httpbin:
+    build:
+      context: .
+      dockerfile: Dockerfile.httpbin
+    ports:
+      - "8000:80" # Map httpbin port
+    environment:
+      - PORT=80
+      - GUNICORN_CMD_ARGS="--bind=0.0.0.0:80 --workers=2 --timeout=120"
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:80/get" ]
+      interval: 5s
+      timeout: 10s
+      retries: 15
+      start_period: 15s
+    networks:
+      proxy-test-network:
+        aliases:
+          - httpbin
+        priority: 1 # Ensure DNS resolution priority
+    dns_search:
+      - proxy-test-network # Help with DNS resolution
+    restart: "no"
+    stop_grace_period: 10s
+    stop_signal: SIGTERM
+    init: true
+
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    ports:
+      - "8080:8080" # Map proxy port for container access
+    volumes:
+      - .:/app
+      - ./test-results:/app/test-results
+    environment:
+      - PYTHONPATH=/app
+      - TEST_MODE=True
+      - HTTPBIN_URL=http://httpbin
+    networks:
+      proxy-test-network:
+        aliases:
+          - test
+    restart: "no"
+    stop_grace_period: 10s
+    stop_signal: SIGINT
+    depends_on:
+      httpbin:
+        condition: service_healthy
+
+networks:
+  proxy-test-network:
+    name: proxy-test-network
+    driver: bridge
+    labels:
+      - "cleanup=true"

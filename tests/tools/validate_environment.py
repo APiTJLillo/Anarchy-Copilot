@@ -4,13 +4,15 @@
 import sys
 import os
 import subprocess
-import pkg_resources
+import importlib.metadata
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import logging
 import json
 from dataclasses import dataclass
 import shutil
+import pkg_resources
+from packaging.version import parse
 
 logging.basicConfig(
     level=logging.INFO,
@@ -80,16 +82,20 @@ class EnvironmentValidator:
                 req_name = req.split(">=")[0] if ">=" in req else req.split("==")[0]
                 req_version = req.split(">=")[1] if ">=" in req else req.split("==")[1]
                 
-                dist = pkg_resources.get_distribution(req_name)
-                installed = dist.version
+                installed = importlib.metadata.version(req_name)
                 
-                # Compare versions
-                is_valid = pkg_resources.parse_version(installed) >= pkg_resources.parse_version(req_version)
+                is_valid = parse(installed) >= parse(req_version)
                 status = "ok" if is_valid else "warning"
                 message = (f"Version {installed} installed" if is_valid else
                           f"Version {req_version} required, found {installed}")
-                
+            except DistributionNotFound:
+                status = "error"
+                message = "Package not installed"
+                installed = None
             except pkg_resources.DistributionNotFound:
+                status = "error"
+                message = "Package not installed"
+                installed = None
                 status = "error"
                 message = "Package not installed"
                 installed = None

@@ -3,6 +3,7 @@
 from .validate_templates import TemplateValidator
 from .validate_environment import EnvironmentValidator, RequirementCheck
 from .test_summary import TestSummarizer
+from typing import Optional
 
 __all__ = [
     'TemplateValidator',
@@ -36,7 +37,7 @@ def generate_test_summary(
     junit_path: str,
     coverage_path: str,
     output_dir: str,
-    environment: dict = None
+    environment: Optional[dict] = None
 ) -> bool:
     """
     Generate test summary report.
@@ -70,7 +71,7 @@ def generate_test_summary(
 # Make template validation available at package level
 def validate_templates(
     template_dir: str,
-    patterns: list = None,
+    patterns: list = [],
     strict: bool = False
 ) -> bool:
     """
@@ -86,4 +87,4 @@ def validate_templates(
     """
     from pathlib import Path
     validator = TemplateValidator(Path(template_dir))
-    return validator.validate_all(patterns=patterns, strict=strict)
+    return validator.validate_all()

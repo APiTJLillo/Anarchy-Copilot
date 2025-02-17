@@ -81,16 +81,35 @@ class ReconManager:
         # Save results to database if available
         if self.db:
             for result in results:
-                scan_result = ReconResult(
-                    config_id=config.id,
-                    tool=result.get("tool", "unknown"),
-                    data=result
+                await self.db.save_result(
+                    tool=result.get("type", "unknown"),
+                    domain=config.target,
+                    results=result
                 )
-                self.db.add(scan_result)
-            self.db.commit()
 
         return results
 
     def get_status(self) -> Dict[str, Any]:
         """Get the current progress of the scan."""
-        return self.orchestrator.progress.get_status()
+        return {
+            "status": "ready",  # Basic status since orchestrator doesn't track state
+            "current_task": None
+        }
+
+    async def full_scan(self, domain: str) -> List[Dict[str, Any]]:
+        """Run a full scan of all enabled reconnaissance methods.
+        
+        Args:
+            domain: Target domain
+            
+        Returns:
+            List of all scan results
+        """
+        config = ScanConfig(
+            target=domain,
+            network_scan_enabled=True,
+            port_scan_enabled=True,
+            dns_scan_enabled=True,
+            subdomain_scan_enabled=True
+        )
+        return await self.run_scan(config)

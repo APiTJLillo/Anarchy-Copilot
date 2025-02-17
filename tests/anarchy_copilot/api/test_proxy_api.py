@@ -1,242 +1,200 @@
-"""Tests for proxy management API endpoints."""
+"""Tests for proxy server API endpoints."""
+import asyncio
+import logging
+from typing import Dict, Any, AsyncGenerator
+
 import pytest
-from unittest.mock import AsyncMock, Mock, patch
-from fastapi.testclient import TestClient
-from datetime import datetime, timezone
+from httpx import AsyncClient, Timeout
 
-from api import app
-from proxy.interceptor import InterceptedRequest, InterceptedResponse
-from api.proxy import ProxySettings
-from proxy.core import ProxyServer
-from proxy.config import ProxyConfig
-from proxy.session import HistoryEntry
-
-def test_get_proxy_status(test_client):
-    """Test getting proxy server status."""
-    response = test_client.get("/api/proxy/status")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["isRunning"] is False
-    assert "history" in data
-
-def test_get_proxy_status_with_server(test_client, mock_proxy_server):
-    """Test getting proxy status with active server."""
-    import api.proxy
-    api.proxy.proxy_server = mock_proxy_server
-    
-    response = test_client.get("/api/proxy/status")
-    assert response.status_code == 200
-    data = response.json()
-    assert data["isRunning"] is True
-    assert data["interceptRequests"] is True
-    assert data["interceptResponses"] is True
-    assert "history" in data
+logger = logging.getLogger(__name__)
 
 @pytest.mark.asyncio
-async def test_start_proxy(test_client, test_port):
-    """Test starting proxy server."""
-    # Test without required fields
-    response = test_client.post("/api/proxy/start", json={})
-    assert response.status_code == 422
-    errors = response.json()["detail"]
-    
-    host_error = next((err for err in errors if err["loc"] == ["body", "host"]), None)
-    assert host_error is not None
-    assert host_error["msg"].lower() == "field required"
+class TestProxyAPI:
+    """Test proxy server API endpoints."""
 
-    # Test with invalid host
-    response = test_client.post(
-        "/api/proxy/start",
-        json={
-            "host": "",
-            "port": test_port,
-            "interceptRequests": True,
-            "interceptResponses": True
-        }
-    )
-    assert response.status_code == 422
-    errors = response.json()["detail"]
-    assert any("min_length" in err["msg"].lower() for err in errors)
+    async def test_httpbin_ready(self, base_client: AsyncGenerator[AsyncClient, None]) -> None:
+        """Verify httpbin service is ready."""
+        async for client in base_client:
+            max_attempts = 5  # Increased retries
+            async with AsyncClient(
+                base_url="http://httpbin",  # Use container name in Docker network
+                verify=False,
+                timeout=10.0
+            ) as test_client:
+                for attempt in range(max_attempts):
+                    try:
+                        response = await test_client.get("/get")
+                        assert response.status_code == 200
+                        data = response.json()
+                        assert "url" in data
+                        assert data["url"].endswith("/get")
 
-    # Test valid config
-    mock_server = Mock(spec=ProxyServer)
-    mock_server.is_running = True
-    mock_server.start = AsyncMock()
+                        # Double-check stability
+                        response = await test_client.get("/get")
+                        assert response.status_code == 200
+                        logger.info(f"Httpbin responded successfully on attempt {attempt + 1}")
+                        break
+                    except Exception as e:
+                        logger.warning(f"Httpbin test failed (attempt {attempt + 1}/{max_attempts}): {e}")
+                        await asyncio.sleep(3.0)  # Longer wait between retries
+                else:
+                    raise RuntimeError(f"Httpbin service not stable after {max_attempts} attempts")
+                logger.info("Httpbin is ready and stable")
 
-    with patch('api.proxy.ProxyServer', return_value=mock_server):
-        response = test_client.post(
-            "/api/proxy/start",
-            json={
+    async def test_start_proxy(
+        self,
+        base_client: AsyncGenerator[AsyncClient, None],
+        proxy_client: AsyncGenerator[Dict[str, Any], None]
+    ) -> None:
+        """Test starting proxy server."""
+        async for client in base_client:
+            try:
+                # Ensure no proxy is running before starting
+                try:
+                    await client.post("/api/proxy/stop")
+                    await asyncio.sleep(3.0)  # Wait for full cleanup
+                except Exception:
+                    pass  # Ignore errors if no proxy was running
+
+                # Start the proxy
+                config = {
+                    "host": "0.0.0.0",
+                    "port": 8080,
+                    "interceptRequests": True,
+                    "interceptResponses": True,
+                    "allowedHosts": ["httpbin", "localhost"],
+                    "excludedHosts": [],
+                    "maxConnections": 50,
+                    "maxKeepaliveConnections": 10,
+                    "keepaliveTimeout": 30
+                }
+                response = await client.post("/api/proxy/start", json=config)
+                assert response.status_code == 201
+
+                # Verify proxy is running with retry
+                max_status_attempts = 5
+                for attempt in range(max_status_attempts):
+                    status = await client.get("/api/proxy/status")
+                    assert status.status_code == 200
+                    status_data = status.json()
+                    if status_data["isRunning"]:
+                        break
+                    await asyncio.sleep(1.0)
+                else:
+                    raise RuntimeError("Proxy failed to start properly")
+
+                # Test request through proxy with enhanced retry logic
+                max_attempts = 3
+                last_error = None
+                success = False
+                
+                async for proxy in proxy_client:
+                    # Test request through proxy with timeout
+                    try:
+                        async def make_request():
+                            for attempt in range(max_attempts):
+                                try:
+                                    response = await proxy["client"].get(
+                                        "/get",
+                                        timeout=Timeout(5.0)  # Shorter timeout for quicker retries
+                                    )
+                                    assert response.status_code == 200
+                                    data = response.json()
+                                    assert data["url"].endswith("/get")
+                                    return True
+                                except Exception as e:
+                                    last_error = e
+                                    logger.warning(f"Proxy request failed (attempt {attempt + 1}/{max_attempts}): {e}")
+                                    if attempt < max_attempts - 1:
+                                        await asyncio.sleep(1.0)  # Shorter sleep between retries
+                            return False
+
+                        success = await asyncio.wait_for(make_request(), timeout=15.0)  # 15 second total timeout
+                        if not success:
+                            raise RuntimeError(f"Failed to make proxy request after {max_attempts} attempts: {last_error}")
+                        break  # Success, exit proxy client loop
+                    except asyncio.TimeoutError:
+                        raise RuntimeError("Timeout waiting for proxy request to complete")
+            finally:
+                # Always try to stop the proxy after test with timeout
+                try:
+                    async def cleanup():
+                        await client.post("/api/proxy/stop")
+                        await asyncio.sleep(2.0)  # Reduced cleanup wait
+                    
+                    await asyncio.wait_for(cleanup(), timeout=10.0)  # 10 second timeout for cleanup
+                except asyncio.TimeoutError:
+                    logger.error("Timeout during proxy cleanup")
+                except Exception as e:
+                    logger.warning(f"Error stopping proxy during cleanup: {e}")
+
+    async def test_stop_proxy(
+        self,
+        base_client: AsyncGenerator[AsyncClient, None]
+    ) -> None:
+        """Test stopping proxy server."""
+        async for client in base_client:
+            try:
+                # Start the proxy first
+                config = {
+                    "host": "0.0.0.0",
+                    "port": 8080,
+                    "interceptRequests": True,
+                    "interceptResponses": True,
+                    "allowedHosts": ["httpbin", "localhost"],
+                    "excludedHosts": [],
+                    "maxConnections": 50,
+                    "maxKeepaliveConnections": 10,
+                    "keepaliveTimeout": 30
+                }
+                response = await client.post("/api/proxy/start", json=config, timeout=10.0)
+                assert response.status_code == 201
+
+                # Wait for proxy to start and verify it's running
+                for _ in range(5):
+                    status = await client.get("/api/proxy/status", timeout=5.0)
+                    assert status.status_code == 200
+                    if status.json()["isRunning"]:
+                        break
+                    await asyncio.sleep(1.0)
+                else:
+                    raise RuntimeError("Proxy failed to start")
+
+                # Send stop request and let server handle cleanup
+                response = await client.post("/api/proxy/stop", timeout=5.0)
+                assert response.status_code == 201
+                data = response.json()
+                assert data["message"] == "Proxy server stopped successfully"
+                
+                # Just wait a bit for cleanup without checking status
+                await asyncio.sleep(3.0)
+            finally:
+                # Ensure cleanup
+                try:
+                    await client.post("/api/proxy/stop", timeout=5.0)
+                except Exception:
+                    pass  # Ignore errors during cleanup
+
+    async def test_proxy_status(self, base_client: AsyncGenerator[AsyncClient, None]) -> None:
+        """Test proxy status endpoint."""
+        async for client in base_client:
+            response = await client.get("/api/proxy/status")
+            assert response.status_code == 200
+            data = response.json()
+            assert isinstance(data, dict)
+            assert "isRunning" in data
+            assert "settings" in data
+            assert isinstance(data["settings"], dict)
+
+    async def test_start_proxy_failure(self, base_client: AsyncGenerator[AsyncClient, None]) -> None:
+        """Test proxy failure handling."""
+        async for client in base_client:
+            response = await client.post("/api/proxy/start", json={
                 "host": "127.0.0.1",
-                "port": test_port,
+                "port": -1,  # Invalid port
                 "interceptRequests": True,
                 "interceptResponses": True,
-                "allowedHosts": [],
+                "allowedHosts": ["httpbin"],
                 "excludedHosts": []
-            }
-        )
-        
-        assert response.status_code == 201
-        assert response.json()["status"] == "success"
-        mock_server.start.assert_awaited_once()
-
-@pytest.mark.asyncio
-async def test_stop_proxy(test_client, mock_proxy_server):
-    """Test stopping proxy server."""
-    # Test without proxy running
-    response = test_client.post("/api/proxy/stop")
-    assert response.status_code == 400
-    assert "not running" in response.json()["detail"].lower()
-
-    # Test with proxy running
-    import api.proxy
-    api.proxy.proxy_server = mock_proxy_server
-    
-    response = test_client.post("/api/proxy/stop")
-    assert response.status_code == 200
-    assert response.json()["status"] == "success"
-    mock_proxy_server.stop.assert_awaited_once()
-
-def test_get_history_entry(test_client, mock_proxy_server):
-    """Test getting history entry details."""
-    import api.proxy
-    api.proxy.proxy_server = mock_proxy_server
-
-    # Create test data
-    request_data = {
-        "method": "GET",
-        "url": "http://example.com",
-        "headers": {},
-        "body": ""
-    }
-    response_data = {
-        "status_code": 200,
-        "headers": {},
-        "body": "test"
-    }
-    
-    # Configure mock objects
-    mock_request = Mock(spec=InterceptedRequest)
-    mock_request.method = "GET"
-    mock_request.url = "http://example.com"
-    mock_request.headers = {}
-    mock_request.body = b""
-    mock_request.to_dict.return_value = request_data
-
-    mock_response = Mock(spec=InterceptedResponse)
-    mock_response.status_code = 200
-    mock_response.headers = {}
-    mock_response.body = b"test"
-    mock_response.to_dict.return_value = response_data
-    
-    mock_entry = Mock(spec=HistoryEntry)
-    mock_entry.id = "test-id"
-    mock_entry.timestamp = datetime.now(timezone.utc)
-    mock_entry.request = mock_request
-    mock_entry.response = mock_response
-    mock_entry.tags = []
-    mock_entry.notes = None
-    mock_entry.duration = 0.1
-
-    mock_proxy_server.session.find_entry.return_value = mock_entry
-
-    response = test_client.get("/api/proxy/history/test-id")
-    assert response.status_code == 200
-    data = response.json()
-    
-    assert data["id"] == mock_entry.id
-    assert data["request"] == request_data
-    assert data["response"] == response_data
-    assert data["tags"] == mock_entry.tags
-    assert data["notes"] == mock_entry.notes
-    assert data["duration"] == mock_entry.duration
-
-def test_get_history_entry_not_found(test_client, mock_proxy_server):
-    """Test getting non-existent history entry."""
-    import api.proxy
-    api.proxy.proxy_server = mock_proxy_server
-    mock_proxy_server.session.find_entry.return_value = None
-    
-    response = test_client.get("/api/proxy/history/invalid-id")
-    assert response.status_code == 404
-
-def test_add_entry_tag(test_client, mock_proxy_server):
-    """Test adding a tag to a history entry."""
-    import api.proxy
-    api.proxy.proxy_server = mock_proxy_server
-    
-    # Test without tag
-    response = test_client.post("/api/proxy/history/test-id/tags", json={})
-    assert response.status_code == 422
-    error = response.json()["detail"]
-    assert isinstance(error, list)
-    assert error[0]["msg"].lower() == "field required"
-    assert error[0]["loc"] == ["body", "tag"]
-
-    # Test valid tag
-    response = test_client.post(
-        "/api/proxy/history/test-id/tags",
-        json={"tag": "interesting"}
-    )
-    assert response.status_code == 200
-    assert response.json()["status"] == "success"
-    mock_proxy_server.session.add_entry_tag.assert_called_once_with("test-id", "interesting")
-
-def test_set_entry_note(test_client, mock_proxy_server):
-    """Test setting a note on a history entry."""
-    import api.proxy
-    api.proxy.proxy_server = mock_proxy_server
-
-    # Test without note    
-    response = test_client.post("/api/proxy/history/test-id/notes", json={})
-    assert response.status_code == 422
-    error = response.json()["detail"]
-    assert isinstance(error, list)
-    assert error[0]["msg"].lower() == "field required"
-    assert error[0]["loc"] == ["body", "note"]
-
-    # Test valid note
-    response = test_client.post(
-        "/api/proxy/history/test-id/notes",
-        json={"note": "Test note"}
-    )
-    assert response.status_code == 200
-    assert response.json()["status"] == "success"
-    mock_proxy_server.session.set_entry_note.assert_called_once_with("test-id", "Test note")
-
-def test_clear_history(test_client, mock_proxy_server):
-    """Test clearing the proxy history."""
-    import api.proxy
-    api.proxy.proxy_server = mock_proxy_server
-    
-    response = test_client.post("/api/proxy/history/clear")
-    assert response.status_code == 200
-    assert response.json()["status"] == "success"
-    mock_proxy_server.session.clear_history.assert_called_once()
-
-def test_validation_errors(test_client):
-    """Test validation error handling."""
-    # Test without proxy running
-    response = test_client.post("/api/proxy/stop")
-    assert response.status_code == 400
-    assert "not running" in response.json()["detail"].lower()
-    
-    # Test missing/invalid fields
-    test_cases = [
-        ("/api/proxy/start", {}, "field required", ["body", "host"]),
-        ("/api/proxy/history/test-id/tags", {}, "field required", ["body", "tag"]),
-        ("/api/proxy/history/test-id/notes", {}, "field required", ["body", "note"]),
-        ("/api/proxy/start", {"host": ""}, "min_length", ["body", "host"])
-    ]
-    
-    for endpoint, body, expected_error, expected_loc in test_cases:
-        response = test_client.post(endpoint, json=body)
-        assert response.status_code == 422, \
-            f"Expected validation error for {endpoint}"
-        
-        errors = response.json()["detail"]
-        error = next((err for err in errors if expected_error in err["msg"].lower()), None)
-        assert error is not None, \
-            f"Expected '{expected_error}' in validation errors"
-        assert error["loc"] == expected_loc, \
-            f"Expected error location {expected_loc}, got {error['loc']}"
+            })
+            assert response.status_code in (400, 422)

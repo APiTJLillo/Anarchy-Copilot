@@ -4,7 +4,7 @@ import pytest
 import asyncio
 import logging
 from pathlib import Path
-from typing import Dict, Any, List, Generator
+from typing import Dict, Any, List, Generator, AsyncGenerator
 import tempfile
 import shutil
 
@@ -104,7 +104,7 @@ def example_logger() -> logging.Logger:
     return logger
 
 @pytest.fixture
-async def example_server(example_dir: Path) -> Generator[str, None, None]:
+async def example_server(example_dir: Path) -> AsyncGenerator[str, None]:
     """Create a simple test server for examples."""
     from aiohttp import web
     

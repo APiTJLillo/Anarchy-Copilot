@@ -10,7 +10,14 @@ RUN apt-get update && apt-get install -y \
     vim \
     nmap \
     chromium \
+    curl \
+    iputils-ping \
+    procps \
     && rm -rf /var/lib/apt/lists/*
+
+# Add healthcheck script
+COPY scripts/healthcheck.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/healthcheck.sh
 
 # Install nuclei
 RUN wget https://github.com/projectdiscovery/nuclei/releases/download/v2.9.0/nuclei_2.9.0_linux_amd64.zip \
@@ -33,7 +40,8 @@ RUN pip install --no-cache-dir \
     ipdb \
     debugpy \
     pip-tools \
-    watchdog
+    watchdog \
+    pre-commit
 
 # Copy requirements files
 COPY requirements*.txt ./

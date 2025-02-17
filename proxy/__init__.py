@@ -11,6 +11,7 @@ from .interceptor import (
     JSONModifyInterceptor,
     SecurityHeadersInterceptor,
 )
+from .analysis.analyzer import TrafficAnalyzer  # Import from correct path
 from .session import ProxySession
 
 __all__ = [
@@ -24,4 +25,5 @@ __all__ = [
     'JSONModifyInterceptor',
     'SecurityHeadersInterceptor',
     'ProxySession',
+    'TrafficAnalyzer',
 ]

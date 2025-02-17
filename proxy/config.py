@@ -24,7 +24,9 @@ class ProxyConfig:
     excluded_hosts: Set[str] = field(default_factory=set)
     
     # Performance settings
-    max_connections: int = 200
+    max_connections: int = 100
+    max_keepalive_connections: int = 20
+    keepalive_timeout: int = 30
     connection_timeout: int = 30
     read_timeout: int = 30
     write_timeout: int = 30
@@ -57,6 +59,12 @@ class ProxyConfig:
         
         if self.max_connections <= 0:
             raise ValueError("Max connections must be positive")
+
+        if self.max_keepalive_connections <= 0:
+            raise ValueError("Max keepalive connections must be positive")
+            
+        if self.keepalive_timeout <= 0:
+            raise ValueError("Keepalive timeout must be positive")
         
         if self.connection_timeout <= 0:
             raise ValueError("Connection timeout must be positive")
@@ -110,6 +118,8 @@ class ProxyConfig:
             },
             "performance": {
                 "max_connections": self.max_connections,
+                "max_keepalive_connections": self.max_keepalive_connections,
+                "keepalive_timeout": self.keepalive_timeout,
                 "connection_timeout": self.connection_timeout,
                 "read_timeout": self.read_timeout,
                 "write_timeout": self.write_timeout,
@@ -154,7 +164,9 @@ class ProxyConfig:
             ssl_version=ssl_config.get("ssl_version", ssl.PROTOCOL_TLS_SERVER),
             allowed_hosts=set(scope.get("allowed_hosts", [])),
             excluded_hosts=set(scope.get("excluded_hosts", [])),
-            max_connections=performance.get("max_connections", 200),
+            max_connections=performance.get("max_connections", 100),
+            max_keepalive_connections=performance.get("max_keepalive_connections", 20),
+            keepalive_timeout=performance.get("keepalive_timeout", 30),
             connection_timeout=performance.get("connection_timeout", 30),
             read_timeout=performance.get("read_timeout", 30),
             write_timeout=performance.get("write_timeout", 30),

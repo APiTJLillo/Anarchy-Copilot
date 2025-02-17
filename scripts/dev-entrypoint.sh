@@ -17,25 +17,33 @@ command_exists() {
 verify_tools() {
     log "Verifying development tools..."
     
-    # Check Python
+    # Check required tools
     if ! command_exists python; then
         log "ERROR: Python not found"
         exit 1
     fi
     
-    # Check Nuclei
-    if ! command_exists nuclei; then
-        log "ERROR: Nuclei not found"
-        exit 1
-    fi
-    
-    # Check pip
     if ! command_exists pip; then
         log "ERROR: pip not found"
         exit 1
-    }
+    fi
+    
+    # Check optional tools
+    if ! command_exists nuclei; then
+        log "WARNING: Nuclei not found, some features may be limited"
+    fi
 
-    log "All required tools are available"
+    log "Required tools verification complete"
+}
+
+# Run database migrations
+run_migrations() {
+    log "Running database migrations..."
+    if command_exists alembic; then
+        alembic upgrade head
+    else
+        log "WARNING: alembic not found, skipping migrations"
+    fi
 }
 
 # Setup development environment
@@ -47,16 +55,13 @@ setup_dev_env() {
     mkdir -p /app/data
     mkdir -p /app/tests/data/output
     
-    # Install pre-commit hooks if git repo exists
-    if [ -d ".git" ]; then
+    # Install pre-commit hooks if git repo exists and pre-commit is available
+    if [ -d ".git" ] && command_exists pre-commit; then
         log "Installing pre-commit hooks..."
-        pre-commit install
+        pre-commit install || { log "Pre-commit hooks installation skipped"; true; }
+    else
+        log "Skipping git hooks setup (git not available or not in a repo)"
     fi
-    
-    # Update pip tools
-    log "Updating development dependencies..."
-    pip-compile --upgrade requirements.txt
-    pip-compile --upgrade tests/requirements-test.txt
     
     # Install dependencies
     log "Installing package in development mode..."
@@ -65,15 +70,29 @@ setup_dev_env() {
     
     # Create package symlinks
     log "Setting up package symlinks..."
-    cd /usr/local/lib/python3.10/site-packages/
-    ln -sf /app/recon_module .
-    ln -sf /app/vuln_module .
-    ln -sf /app/anarchy_copilot .
-    cd /app
+    SITE_PACKAGES="/usr/local/lib/python3.10/site-packages"
+    if [ -d "$SITE_PACKAGES" ]; then
+        cd "$SITE_PACKAGES"
+        for module in recon_module vuln_module anarchy_copilot; do
+            if [ -d "/app/$module" ]; then
+                ln -sf "/app/$module" .
+            else
+                log "WARNING: Module directory /app/$module not found, skipping symlink"
+            fi
+        done
+        cd /app
+    else
+        log "WARNING: Python site-packages directory not found, skipping symlinks"
+    fi
     
-    # Update Nuclei templates
-    log "Updating Nuclei templates..."
-    nuclei -update-templates
+    # Update Nuclei templates if available
+    if command_exists nuclei; then
+        log "Updating Nuclei templates..."
+        nuclei -update-templates || log "WARNING: Failed to update Nuclei templates"
+    fi
+
+    # Run database migrations
+    run_migrations
 }
 
 # Setup debugger
@@ -83,7 +102,7 @@ setup_debugger() {
     # Create VSCode debugging configuration if it doesn't exist
     if [ ! -f ".vscode/launch.json" ]; then
         mkdir -p .vscode
-        cat > .vscode/launch.json <<EOF
+        cat > .vscode/launch.json << 'EOF'
 {
     "version": "0.2.0",
     "configurations": [
@@ -95,7 +114,7 @@ setup_debugger() {
             "port": 5678,
             "pathMappings": [
                 {
-                    "localRoot": "\${workspaceFolder}",
+                    "localRoot": "${workspaceFolder}",
                     "remoteRoot": "/app"
                 }
             ]
@@ -106,24 +125,55 @@ EOF
     fi
 }
 
+# Wait for the API to be ready
+wait_for_api() {
+    log "Waiting for API to be ready..."
+    local retries=30
+    local wait_seconds=1
+    
+    while [ $retries -gt 0 ]; do
+        if curl -s -f "http://localhost:8000/api/health" > /dev/null 2>&1; then
+            log "API is ready!"
+            return 0
+        fi
+        retries=$((retries-1))
+        log "API not ready yet, waiting... ($retries attempts left)"
+        sleep $wait_seconds
+    done
+    
+    log "ERROR: API failed to start"
+    return 1
+}
+
 # Start development services
 start_services() {
     log "Starting development services..."
     
+    # Run migrations before starting server
+    run_migrations
+    
     # Start API server with debugger
     log "Starting API server with debugger on port 5678..."
+    log "Current directory: $(pwd)"
+    log "Python path: $PYTHONPATH"
+    log "Available Python packages:"
+    pip list
+    
+    # Start the FastAPI application
     python -m debugpy --listen 0.0.0.0:5678 \
-        -m uvicorn api:app \
+        -m uvicorn main:app \
         --host 0.0.0.0 \
         --port 8000 \
         --reload \
-        --log-level debug
+        --log-level debug \
+        --proxy-headers \
+        --timeout-keep-alive 75
 }
 
 # Cleanup function
 cleanup() {
     log "Cleaning up..."
-    # Add cleanup tasks here
+    pkill -f "uvicorn" || true
 }
 
 # Register cleanup handler

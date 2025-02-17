@@ -5,9 +5,10 @@ This module provides base classes for intercepting and modifying HTTP requests
 and responses as they pass through the proxy.
 """
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Union
 from http import HTTPStatus
+from uuid import uuid4
 import json
 import urllib.parse
 
@@ -18,6 +19,7 @@ class InterceptedRequest:
     url: str
     headers: Dict[str, str]
     body: Optional[bytes] = None
+    id: str = field(default_factory=lambda: str(uuid4()))
     
     @property
     def parsed_url(self) -> urllib.parse.ParseResult:
@@ -127,7 +129,7 @@ class ProxyInterceptor(RequestInterceptor, ResponseInterceptor):
         """
         return response
 
-    async def intercept(self, req_or_resp: InterceptedRequest | InterceptedResponse, request: Optional[InterceptedRequest] = None) -> InterceptedRequest | InterceptedResponse:
+    async def intercept(self, req_or_resp: Union[InterceptedRequest, InterceptedResponse], request: Optional[InterceptedRequest] = None) -> Union[InterceptedRequest, InterceptedResponse]:
         """Route to appropriate intercept method based on argument type."""
         if isinstance(req_or_resp, InterceptedRequest):
             return await self.intercept_request(req_or_resp)

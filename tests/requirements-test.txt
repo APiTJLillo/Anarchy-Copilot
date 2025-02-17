@@ -1,6 +1,7 @@
 # Testing dependencies
 packaging>=23.0.0  # For version parsing
 pytest>=7.0.0
+psutil>=5.9.0  # For system metrics in health checks
 pytest-asyncio>=0.18.0
 pytest-cov>=3.0.0
 pytest-xdist>=2.5.0

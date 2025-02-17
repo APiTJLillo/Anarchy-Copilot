@@ -64,7 +64,7 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
 
 ## Phase 2: Data Model & Core Database
 
-1. **Design Data Schemas**
+1. **Design Data Schemas** (Completed)
    - **Projects**: Name, scope details, owners, etc.
    - **Recon Results**: Domains, subdomains, IPs, etc.
    - **Vulnerabilities**: Vulnerability type, severity, status, assigned user, etc.
@@ -149,33 +149,62 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
 
 ## Phase 4: Vulnerability Discovery Module
 
-1. **Integrated Scanning Platform**
-   - Integrate Nuclei as primary scanning engine
-   - Develop custom web attack proxy with advanced features:
-     - Request/response interception and modification
-     - Real-time traffic analysis
-     - Automated pattern matching
-     - Plugin support for custom interceptors
-     - Session management and replay
-     - HTTP/HTTPS/HTTP2 support
-     - WebSocket interception
-     - A way for Docker to show what's going on in the Chromium browser
+1. **Integrated Scanning Platform** (In Progress)
+   - ✓ Integrate Nuclei as primary scanning engine
+     - ✓ Basic scanner implementation
+     - ✓ Configuration validation and management
+     - ✓ Test suite and error handling
+   - ✓ Develop custom web attack proxy with advanced features:
+     - ✓ Request/response interception and modification
+     - ✓ Basic traffic analysis
+     - ✓ Session management and replay capabilities
+     - In Progress:
+       - Plugin support for custom interceptors
+       - WebSocket interception
+       - Advanced traffic analysis
+       - A way for Docker to show what's going on in the Chromium browser
    - Integrate auxiliary tools (e.g., SQLMap, XSSHunter)
    - Unified configuration management
    - Advanced logging and audit trails
 
-2. **Proxy Core Development**
+2. **Proxy Core Development** (In Progress)
    - Design modular proxy architecture:
-     - Core proxy engine with protocol support
-     - Plugin system for request/response processors
-     - Traffic capture and storage
-     - Certificate management for HTTPS
-   - Implement key features:
-     - Automatic scope enforcement
-     - Request/response modification UI
-     - History and search functionality
-     - Advanced filtering capabilities
-     - Macro recording and replay
+     - ✓ Core proxy engine with protocol support
+     - ✓ Basic plugin system for request/response processors
+     - ✓ Traffic capture and storage
+     - ✓ Certificate management for HTTPS
+   - Frontend components:
+     - ✓ Modal-based interception dialog
+     - ✓ Request/response editors with syntax highlighting
+     - ✓ Basic traffic history view
+     - ✓ Real-time traffic status updates
+   - Core features:
+     - ✓ HTTP/HTTPS interception
+     - ✓ Request/response modification
+     - ✓ Header manipulation
+     - ✓ Body content editing
+     - ✓ Content encoding validation:
+       - ✓ Gzip compression handling
+       - ✓ Empty content support
+       - ✓ Charset validation
+       - ✓ Content-Length verification
+     - In Progress:
+       - Add packet capture and manipulation to proxy capabilities
+       - Add lag simulation to proxy
+       - Add AI packet analysis
+       - WebSocket support (websocket.py)
+       - Traffic analysis engine (analysis.py)
+       - Advanced filtering system
+       - Web Crawling Capability
+       - Mapping of website, resources, and external services
+       - Add analysis of website dependencies(javascript, etc) for vulnerabilities and helping map services/applications used
+       - Add analysis of cookies
+       - Add analysis of URL parameters and detection of attack vectors
+   - Advanced features (Planned):
+     - Advanced pattern matching
+     - Automated attack detection
+     - Custom interceptor plugins
+     - Macro recording/replay
    - Performance optimization:
      - Efficient traffic handling
      - Memory management for large sessions
@@ -289,6 +318,9 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
 
 5. **Logging**
    - Record detailed logs for all exploit attempts (including timestamps, user actions, and outcomes).
+
+6. **Testing**
+   - Perform testing on various ctf challenges online
 
 ---
 

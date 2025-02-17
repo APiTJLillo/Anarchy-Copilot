@@ -8,7 +8,6 @@ import pytest
 from unittest.mock import patch, MagicMock
 from fastapi.testclient import TestClient
 
-from api import app
 
 def test_get_system_status():
     """Test getting system status."""

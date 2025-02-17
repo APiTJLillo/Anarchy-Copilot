@@ -1,9 +1,9 @@
 import React, { useState } from 'react';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
 import { Box, CssBaseline, ThemeProvider, createTheme } from '@mui/material';
 import AppLayout from './components/layout/AppLayout';
 import ReconDashboard from './ReconDashboard';
-import ProxyDashboard from './ProxyDashboard';
+import { ProxyDashboard } from './ProxyDashboard';
 
 // Create base theme
 const theme = createTheme({

@@ -68,7 +68,7 @@ def test_generate_report(example_report_dir: Path):
     soup = BeautifulSoup(content, 'html.parser')
     
     # Check basic structure
-    assert soup.title.text.strip() == f"{findings['metadata']['scan_config']['name']} - Scan Report"
+    assert soup.title and soup.title.text.strip() == f"{findings['metadata']['scan_config']['name']} - Scan Report"
     assert soup.find("div", class_="header")
     
     # Check findings are rendered

@@ -18,6 +18,7 @@ def reset_state() -> None:
 
 # Import and setup other modules
 from .models import *  # noqa: F403
+from .analysis_models import *  # noqa: F403
 from .utils import cleanup_port, try_close_sockets, find_processes_using_port  # noqa: F401
 from .endpoints import *  # noqa: F403
 
@@ -34,6 +35,8 @@ __all__ = [
 
 # Add all models and endpoints to __all__
 from .models import __all__ as models_all
+from .analysis_models import __all__ as analysis_models_all
 from .endpoints import __all__ as endpoints_all
 __all__.extend(models_all)
+__all__.extend(analysis_models_all)
 __all__.extend(endpoints_all)

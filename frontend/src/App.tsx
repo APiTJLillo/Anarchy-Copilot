@@ -4,6 +4,8 @@ import { Box, CssBaseline, ThemeProvider, createTheme } from '@mui/material';
 import AppLayout from './components/layout/AppLayout';
 import ReconDashboard from './ReconDashboard';
 import { ProxyDashboard } from './ProxyDashboard';
+import { ProjectManager } from './components/projects/ProjectManager';
+import { ProjectProvider } from './contexts/ProjectContext';
 
 // Create base theme
 const theme = createTheme({
@@ -35,15 +37,18 @@ function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
-      <Router>
-        <AppLayout>
-          <Routes>
-            <Route path="/" element={<ReconDashboard />} />
-            <Route path="/recon" element={<ReconDashboard />} />
-            <Route path="/proxy" element={<ProxyDashboard />} />
-          </Routes>
-        </AppLayout>
-      </Router>
+      <ProjectProvider>
+        <Router>
+          <AppLayout>
+            <Routes>
+              <Route path="/" element={<ReconDashboard />} />
+              <Route path="/recon" element={<ReconDashboard />} />
+              <Route path="/proxy" element={<ProxyDashboard />} />
+              <Route path="/projects" element={<ProjectManager />} />
+            </Routes>
+          </AppLayout>
+        </Router>
+      </ProjectProvider>
     </ThemeProvider>
   );
 }

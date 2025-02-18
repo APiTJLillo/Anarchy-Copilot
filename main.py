@@ -8,10 +8,11 @@ import logging
 import typing
 
 from recon_module.recon_manager import ReconManager
-from models import ReconResult
+from models.recon import ReconResult
 from database import get_db
 from api.proxy import router as proxy_router
 from api.websocket import router as websocket_router
+from api.projects import router as projects_router
 from api import create_app
 
 import uvicorn
@@ -38,6 +39,7 @@ def create_and_configure_app():
 
     # Add routers
     logger.info("Adding routers")
+    app.include_router(projects_router)  # Projects router already has /api/projects prefix
     app.include_router(proxy_router, prefix="/api/proxy")
     app.include_router(websocket_router, prefix="/api/proxy/websocket")
 

@@ -149,9 +149,6 @@ wait_for_api() {
 start_services() {
     log "Starting development services..."
     
-    # Run migrations before starting server
-    run_migrations
-    
     # Start API server with debugger
     log "Starting API server with debugger on port 5678..."
     log "Current directory: $(pwd)"

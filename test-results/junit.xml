@@ -1,318 +1,54 @@
-<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" errors="0" failures="54" skipped="0" tests="57" time="527.259" timestamp="2025-02-16T15:43:35.573283+00:00" hostname="8d7ee4d4ab21"><testcase classname="tests.anarchy_copilot.api.test_proxy_api.TestProxyAPI" name="test_httpbin_ready" time="0.580" /><testcase classname="tests.anarchy_copilot.api.test_proxy_api.TestProxyAPI" name="test_start_proxy" time="13.753"><failure message="RuntimeError: Failed to make proxy request after 3 attempts: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_api.py:93: in test_start_proxy
-    raise RuntimeError(f"Failed to make proxy request after {max_attempts} attempts: {last_error}")
-E   RuntimeError: Failed to make proxy request after 3 attempts: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_api.TestProxyAPI" name="test_stop_proxy" time="22.557"><failure message="assert 500 == 201&#10; +  where 500 = &lt;Response [500 Internal Server Error]&gt;.status_code">tests/anarchy_copilot/api/test_proxy_api.py:114: in test_stop_proxy
+<?xml version="1.0" encoding="utf-8"?><testsuites><testsuite name="pytest" errors="0" failures="14" skipped="0" tests="16" time="25.376" timestamp="2025-02-18T01:56:23.300676+00:00" hostname="53e5f633061f"><testcase classname="tests.anarchy_copilot.api.test_proxy_api.TestProxyAPI" name="test_httpbin_ready" time="0.574" /><testcase classname="tests.anarchy_copilot.api.test_proxy_api.TestProxyAPI" name="test_start_proxy" time="5.516"><failure message="assert 404 == 201&#10; +  where 404 = &lt;Response [404 Not Found]&gt;.status_code">tests/anarchy_copilot/api/test_proxy_api.py:72: in test_start_proxy
     assert response.status_code == 201
-E   assert 500 == 201
-E    +  where 500 = &lt;Response [500 Internal Server Error]&gt;.status_code</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_api.TestProxyAPI" name="test_proxy_status" time="0.508" /><testcase classname="tests.anarchy_copilot.api.test_proxy_api.TestProxyAPI" name="test_start_proxy_failure" time="0.508" /><testcase classname="tests.anarchy_copilot.api.test_proxy_encoding_errors" name="test_corrupted_gzip" time="9.224"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_encoding_errors.py:13: in test_corrupted_gzip
+E   assert 404 == 201
+E    +  where 404 = &lt;Response [404 Not Found]&gt;.status_code</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_api.TestProxyAPI" name="test_stop_proxy" time="0.509"><failure message="assert 404 == 201&#10; +  where 404 = &lt;Response [404 Not Found]&gt;.status_code">tests/anarchy_copilot/api/test_proxy_api.py:151: in test_stop_proxy
+    assert response.status_code == 201
+E   assert 404 == 201
+E    +  where 404 = &lt;Response [404 Not Found]&gt;.status_code</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_api.TestProxyAPI" name="test_proxy_status" time="0.508" /><testcase classname="tests.anarchy_copilot.api.test_proxy_api.TestProxyAPI" name="test_start_proxy_failure" time="0.507"><failure message="assert 404 in (400, 422)&#10; +  where 404 = &lt;Response [404 Not Found]&gt;.status_code">tests/anarchy_copilot/api/test_proxy_api.py:200: in test_start_proxy_failure
+    assert response.status_code in (400, 422)
+E   assert 404 in (400, 422)
+E    +  where 404 = &lt;Response [404 Not Found]&gt;.status_code</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_encoding_errors" name="test_corrupted_gzip" time="1.515"><failure message="RuntimeError: Failed to start proxy: {&quot;detail&quot;:&quot;Not Found&quot;}">tests/anarchy_copilot/api/test_proxy_encoding_errors.py:13: in test_corrupted_gzip
     async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_encoding_errors" name="test_invalid_content_encoding" time="9.221"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_encoding_errors.py:38: in test_invalid_content_encoding
+tests/anarchy_copilot/api/conftest.py:391: in proxy_client
+    raise RuntimeError(f"Failed to start proxy: {response.text}")
+E   RuntimeError: Failed to start proxy: {"detail":"Not Found"}</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_encoding_errors" name="test_invalid_content_encoding" time="1.511"><failure message="RuntimeError: Failed to start proxy: {&quot;detail&quot;:&quot;Not Found&quot;}">tests/anarchy_copilot/api/test_proxy_encoding_errors.py:38: in test_invalid_content_encoding
     async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_encoding_errors" name="test_mismatched_content_length" time="9.233"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_encoding_errors.py:57: in test_mismatched_content_length
+tests/anarchy_copilot/api/conftest.py:391: in proxy_client
+    raise RuntimeError(f"Failed to start proxy: {response.text}")
+E   RuntimeError: Failed to start proxy: {"detail":"Not Found"}</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_encoding_errors" name="test_mismatched_content_length" time="1.510"><failure message="RuntimeError: Failed to start proxy: {&quot;detail&quot;:&quot;Not Found&quot;}">tests/anarchy_copilot/api/test_proxy_encoding_errors.py:57: in test_mismatched_content_length
     async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_encoding_errors" name="test_invalid_charset" time="9.242"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_encoding_errors.py:83: in test_invalid_charset
+tests/anarchy_copilot/api/conftest.py:391: in proxy_client
+    raise RuntimeError(f"Failed to start proxy: {response.text}")
+E   RuntimeError: Failed to start proxy: {"detail":"Not Found"}</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_encoding_errors" name="test_invalid_charset" time="1.511"><failure message="RuntimeError: Failed to start proxy: {&quot;detail&quot;:&quot;Not Found&quot;}">tests/anarchy_copilot/api/test_proxy_encoding_errors.py:83: in test_invalid_charset
     async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_encoding_errors" name="test_mixed_encodings" time="9.248"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_encoding_errors.py:101: in test_mixed_encodings
+tests/anarchy_copilot/api/conftest.py:391: in proxy_client
+    raise RuntimeError(f"Failed to start proxy: {response.text}")
+E   RuntimeError: Failed to start proxy: {"detail":"Not Found"}</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_encoding_errors" name="test_mixed_encodings" time="1.511"><failure message="RuntimeError: Failed to start proxy: {&quot;detail&quot;:&quot;Not Found&quot;}">tests/anarchy_copilot/api/test_proxy_encoding_errors.py:101: in test_mixed_encodings
     async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_encoding_errors" name="test_empty_compressed" time="9.243"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_encoding_errors.py:126: in test_empty_compressed
+tests/anarchy_copilot/api/conftest.py:391: in proxy_client
+    raise RuntimeError(f"Failed to start proxy: {response.text}")
+E   RuntimeError: Failed to start proxy: {"detail":"Not Found"}</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_encoding_errors" name="test_empty_compressed" time="1.510"><failure message="RuntimeError: Failed to start proxy: {&quot;detail&quot;:&quot;Not Found&quot;}">tests/anarchy_copilot/api/test_proxy_encoding_errors.py:126: in test_empty_compressed
     async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_encoding" name="test_gzip_compression" time="9.257"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_encoding.py:14: in test_gzip_compression
+tests/anarchy_copilot/api/conftest.py:391: in proxy_client
+    raise RuntimeError(f"Failed to start proxy: {response.text}")
+E   RuntimeError: Failed to start proxy: {"detail":"Not Found"}</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_encoding" name="test_gzip_compression" time="1.510"><failure message="RuntimeError: Failed to start proxy: {&quot;detail&quot;:&quot;Not Found&quot;}">tests/anarchy_copilot/api/test_proxy_encoding.py:14: in test_gzip_compression
     async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_encoding" name="test_deflate_compression" time="9.273"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_encoding.py:46: in test_deflate_compression
+tests/anarchy_copilot/api/conftest.py:391: in proxy_client
+    raise RuntimeError(f"Failed to start proxy: {response.text}")
+E   RuntimeError: Failed to start proxy: {"detail":"Not Found"}</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_encoding" name="test_deflate_compression" time="1.516"><failure message="RuntimeError: Failed to start proxy: {&quot;detail&quot;:&quot;Not Found&quot;}">tests/anarchy_copilot/api/test_proxy_encoding.py:46: in test_deflate_compression
     async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_encoding" name="test_brotli_compression" time="9.276"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_encoding.py:76: in test_brotli_compression
+tests/anarchy_copilot/api/conftest.py:391: in proxy_client
+    raise RuntimeError(f"Failed to start proxy: {response.text}")
+E   RuntimeError: Failed to start proxy: {"detail":"Not Found"}</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_encoding" name="test_brotli_compression" time="1.510"><failure message="RuntimeError: Failed to start proxy: {&quot;detail&quot;:&quot;Not Found&quot;}">tests/anarchy_copilot/api/test_proxy_encoding.py:76: in test_brotli_compression
     async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_encoding" name="test_multiple_encodings" time="9.300"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_encoding.py:106: in test_multiple_encodings
+tests/anarchy_copilot/api/conftest.py:391: in proxy_client
+    raise RuntimeError(f"Failed to start proxy: {response.text}")
+E   RuntimeError: Failed to start proxy: {"detail":"Not Found"}</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_encoding" name="test_multiple_encodings" time="1.514"><failure message="RuntimeError: Failed to start proxy: {&quot;detail&quot;:&quot;Not Found&quot;}">tests/anarchy_copilot/api/test_proxy_encoding.py:106: in test_multiple_encodings
     async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_encoding" name="test_charset_encoding" time="9.294"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_encoding.py:136: in test_charset_encoding
+tests/anarchy_copilot/api/conftest.py:391: in proxy_client
+    raise RuntimeError(f"Failed to start proxy: {response.text}")
+E   RuntimeError: Failed to start proxy: {"detail":"Not Found"}</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_encoding" name="test_charset_encoding" time="1.510"><failure message="RuntimeError: Failed to start proxy: {&quot;detail&quot;:&quot;Not Found&quot;}">tests/anarchy_copilot/api/test_proxy_encoding.py:136: in test_charset_encoding
     async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_errors" name="test_start_proxy_errors" time="9.313"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_errors.py:11: in test_start_proxy_errors
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_errors" name="test_stop_proxy_errors" time="9.314"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_errors.py:45: in test_stop_proxy_errors
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_errors" name="test_proxy_host_filtering" time="9.302"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_errors.py:58: in test_proxy_host_filtering
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_errors" name="test_history_errors" time="9.347"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_errors.py:102: in test_history_errors
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_errors" name="test_websocket_errors" time="9.316"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_errors.py:130: in test_websocket_errors
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_errors" name="test_concurrent_operations" time="9.338"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_errors.py:157: in test_concurrent_operations
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_errors" name="test_malformed_requests" time="9.368"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_errors.py:174: in test_malformed_requests
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_evasion" name="test_url_encoding_evasion" time="9.364"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_evasion.py:12: in test_url_encoding_evasion
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_evasion" name="test_protocol_evasion" time="9.366"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_evasion.py:36: in test_protocol_evasion
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_evasion" name="test_host_evasion" time="9.363"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_evasion.py:59: in test_host_evasion
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_evasion" name="test_header_evasion" time="9.376"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_evasion.py:81: in test_header_evasion
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_evasion" name="test_content_type_evasion" time="9.402"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_evasion.py:100: in test_content_type_evasion
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_evasion" name="test_encoding_evasion" time="9.395"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_evasion.py:123: in test_encoding_evasion
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_evasion" name="test_path_evasion" time="9.401"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_evasion.py:142: in test_path_evasion
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_evasion" name="test_websocket_evasion" time="9.401"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_evasion.py:162: in test_websocket_evasion
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_headers" name="test_security_headers_forwarding" time="9.399"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_headers.py:10: in test_security_headers_forwarding
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_headers" name="test_header_sanitization" time="9.421"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_headers.py:26: in test_header_sanitization
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_headers" name="test_invalid_header_values" time="9.417"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_headers.py:51: in test_invalid_header_values
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_headers" name="test_header_size_limits" time="9.459"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_headers.py:72: in test_header_size_limits
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_headers" name="test_secure_cookie_handling" time="9.442"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_headers.py:88: in test_secure_cookie_handling
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_headers" name="test_cors_headers" time="9.427"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_headers.py:111: in test_cors_headers
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_headers" name="test_upgrade_insecure_requests" time="9.440"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_headers.py:135: in test_upgrade_insecure_requests
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_headers" name="test_referrer_policy" time="9.453"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_headers.py:149: in test_referrer_policy
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_intercept" name="test_request_interception" time="9.453"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_intercept.py:12: in test_request_interception
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_intercept" name="test_response_interception" time="9.450"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_intercept.py:53: in test_response_interception
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_intercept" name="test_binary_content_interception" time="9.473"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_intercept.py:90: in test_binary_content_interception
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_intercept" name="test_streaming_content" time="9.463"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_intercept.py:134: in test_streaming_content
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_performance" name="test_proxy_concurrent_requests" time="9.463"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_performance.py:39: in test_proxy_concurrent_requests
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_performance" name="test_proxy_websocket_load" time="9.487"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_performance.py:66: in test_proxy_websocket_load
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_performance" name="test_proxy_memory_usage" time="9.488"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_performance.py:108: in test_proxy_memory_usage
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_performance" name="test_proxy_connection_limits" time="9.499"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_performance.py:139: in test_proxy_connection_limits
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_performance" name="test_proxy_large_response_handling" time="9.499"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_performance.py:174: in test_proxy_large_response_handling
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_security" name="test_null_byte_injection" time="9.517"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_security.py:12: in test_null_byte_injection
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_security" name="test_large_header_injection" time="9.501"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_security.py:34: in test_large_header_injection
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_security" name="test_protocol_downgrade" time="9.519"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_security.py:50: in test_protocol_downgrade
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_security" name="test_host_header_injection" time="9.520"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_security.py:68: in test_host_header_injection
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_security" name="test_directory_traversal" time="9.516"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_security.py:83: in test_directory_traversal
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_security" name="test_request_smuggling" time="9.538"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_security.py:103: in test_request_smuggling
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_security" name="test_circular_redirects" time="9.530"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_security.py:133: in test_circular_redirects
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_security" name="test_content_type_mismatch" time="9.551"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_security.py:151: in test_content_type_mismatch
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase><testcase classname="tests.anarchy_copilot.api.test_proxy_security" name="test_security_headers" time="9.603"><failure message="RuntimeError: Failed to free port 8080 after 5 attempts">tests/anarchy_copilot/api/test_proxy_security.py:183: in test_security_headers
-    async for client_data in proxy_client:
-tests/anarchy_copilot/api/conftest.py:336: in proxy_client
-    await ensure_port_free(8080)
-tests/anarchy_copilot/api/conftest.py:245: in ensure_port_free
-    raise RuntimeError(f"Failed to free port {port} after {max_attempts} attempts")
-E   RuntimeError: Failed to free port 8080 after 5 attempts</failure></testcase></testsuite></testsuites>
+tests/anarchy_copilot/api/conftest.py:391: in proxy_client
+    raise RuntimeError(f"Failed to start proxy: {response.text}")
+E   RuntimeError: Failed to start proxy: {"detail":"Not Found"}</failure></testcase><testcase time="0.000" /></testsuite></testsuites>

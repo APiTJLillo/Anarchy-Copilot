@@ -80,13 +80,17 @@ make test
 
 ```
 anarchy-copilot/
-├── anarchy_copilot/        # Main package
-│   ├── api/              # API endpoints and handlers
-│   └── proxy/            # Web Proxy Module
-│       ├── core.py      # Proxy server implementation
+├── models/              # Database models
+│   ├── base.py         # Core models (User, Project)
+│   ├── recon.py        # Reconnaissance models
+│   └── vulnerability.py # Vulnerability and reporting models
+├── api/                # API endpoints and handlers
+│   ├── projects/       # Project management
+│   └── proxy/         # Web Proxy Module
+│       ├── core.py    # Proxy server implementation
 │       ├── interceptor.py # Request/response interception
-│       ├── session.py   # Session management
-│       └── config.py    # Proxy configuration
+│       ├── session.py # Session management
+│       └── config.py  # Proxy configuration
 ├── recon_module/         # Reconnaissance module
 │   ├── models.py        # Data structures
 │   ├── recon_manager.py # Main interface

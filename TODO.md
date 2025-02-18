@@ -75,6 +75,11 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
    - Create models using your chosen framework. (Completed)
    - Set up migrations to evolve the schema. (Completed)
    - Ensure proper relationships (e.g., one project → many vulnerabilities). (Completed)
+   - Reorganize models into separate modules to avoid circular dependencies:
+     - core models in models/base.py (Completed)
+     - recon models in models/recon.py (Completed)
+     - vulnerability models in models/vulnerability.py (Completed)
+   - Update imports across codebase to use new model structure (Completed)
 
 3. **Basic CRUD & API Endpoints** (Completed)
    - Implement endpoints to create, read, update, and delete records (for Projects, Vulnerabilities, Recon data). (Projects Completed)

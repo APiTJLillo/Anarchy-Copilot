@@ -14,8 +14,7 @@ import { InterceptorView } from './components/proxy/InterceptorView';
 import { WebSocketView } from './components/proxy/WebSocketView';
 import { ProxyProvider } from './components/proxy/ProxyContext';
 import AnalysisResults from './components/proxy/AnalysisResults';
-import axios from 'axios';
-import { API_BASE_URL } from './config';
+import { proxyApi, ProxySession, ProxySettings } from './api/proxyApi';
 
 interface ProxyStatus {
   isRunning: boolean;
@@ -61,6 +60,7 @@ const TabPanel: React.FC<TabPanelProps> = (props) => {
 
 export const ProxyDashboard: React.FC = () => {
   const [status, setStatus] = useState<ProxyStatus | null>(null);
+  const [session, setSession] = useState<ProxySession | null>(null);
   const [analysisResults, setAnalysisResults] = useState<AnalysisResult[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -72,8 +72,8 @@ export const ProxyDashboard: React.FC = () => {
 
   const fetchStatus = useCallback(async () => {
     try {
-      const response = await axios.get(`${API_BASE_URL}/api/proxy/status`);
-      setStatus(response.data);
+      const data = await proxyApi.getStatus();
+      setStatus(data);
       setError(null);
     } catch (err) {
       setError('Failed to fetch proxy status');
@@ -83,8 +83,8 @@ export const ProxyDashboard: React.FC = () => {
 
   const fetchAnalysisResults = useCallback(async () => {
     try {
-      const response = await axios.get(`${API_BASE_URL}/api/proxy/analysis/results`);
-      setAnalysisResults(response.data);
+      const data = await proxyApi.getAnalysisResults();
+      setAnalysisResults(data);
       setError(null);
     } catch (err) {
       setError('Failed to fetch analysis results');
@@ -94,14 +94,34 @@ export const ProxyDashboard: React.FC = () => {
 
   const startProxy = useCallback(async () => {
     try {
-      await axios.post(`${API_BASE_URL}/api/proxy/start`, {
+      // Create a new session
+      const newSession = await proxyApi.createSession("New Session", 1, 1, {
         host: "127.0.0.1",
         port: 8080,
         interceptRequests: true,
         interceptResponses: true,
         allowedHosts: [],
-        excludedHosts: []
+        excludedHosts: [],
+        maxConnections: 100,
+        maxKeepaliveConnections: 20,
+        keepaliveTimeout: 30
       });
+      setSession(newSession);
+
+      // Start the proxy with the new session
+      const settings: ProxySettings = {
+        host: "127.0.0.1",
+        port: 8080,
+        interceptRequests: true,
+        interceptResponses: true,
+        allowedHosts: [],
+        excludedHosts: [],
+        maxConnections: 100,
+        maxKeepaliveConnections: 20,
+        keepaliveTimeout: 30
+      };
+
+      await proxyApi.startProxy(newSession.id, settings);
       await fetchStatus();
       setError(null);
     } catch (err) {
@@ -112,8 +132,9 @@ export const ProxyDashboard: React.FC = () => {
 
   const stopProxy = useCallback(async () => {
     try {
-      await axios.post(`${API_BASE_URL}/api/proxy/stop`);
+      await proxyApi.stopProxy();
       await fetchStatus();
+      setSession(null);
       setError(null);
     } catch (err) {
       setError('Failed to stop proxy');
@@ -123,7 +144,7 @@ export const ProxyDashboard: React.FC = () => {
 
   const clearAnalysisResults = useCallback(async () => {
     try {
-      await axios.delete(`${API_BASE_URL}/api/proxy/analysis/results`);
+      await proxyApi.clearAnalysisResults();
       setAnalysisResults([]);
       setError(null);
     } catch (err) {

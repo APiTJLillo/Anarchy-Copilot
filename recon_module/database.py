@@ -5,7 +5,7 @@ from datetime import datetime
 import sqlalchemy.orm  # type: ignore
 from sqlalchemy import desc  # type: ignore
 
-from models import ReconResult
+from models.recon import ReconResult
 from typing import Dict
 
 class ReconDatabase:

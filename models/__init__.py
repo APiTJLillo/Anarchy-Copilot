@@ -1,15 +1,7 @@
-"""Models package entrypoint.
-
-This module re-exports all models from the models package to maintain
-backward compatibility with existing imports.
-"""
-from models.base import (
-    Base, User, Project, project_collaborators
-)
-from models.recon import (
-    ReconResult
-)
-from models.vulnerability import (
+"""Models package."""
+from .base import Base, User, Project, project_collaborators
+from .recon import ReconResult
+from .vulnerability import (
     Vulnerability, VulnerabilityComment, Tag, Report,
     vulnerability_tags, report_vulnerabilities,
     SeverityLevel, VulnerabilityStatus

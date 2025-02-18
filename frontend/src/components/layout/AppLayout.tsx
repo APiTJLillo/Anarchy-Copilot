@@ -20,11 +20,14 @@ import {
   NetworkCheck as NetworkIcon,
   Security as SecurityIcon,
   Build as BuildIcon,
+  FolderSpecial as ProjectIcon,
 } from '@mui/icons-material';
+import { ProjectSelector } from '../projects/ProjectSelector';
 
 const DRAWER_WIDTH = 240;
 
 const menuItems = [
+  { text: 'Projects', icon: <ProjectIcon />, path: '/projects' },
   { text: 'Reconnaissance', icon: <SearchIcon />, path: '/recon' },
   { text: 'Proxy', icon: <NetworkIcon />, path: '/proxy' },
   { text: 'Vulnerabilities', icon: <SecurityIcon />, path: '/vulnerabilities' },
@@ -98,9 +101,14 @@ export default function AppLayout({ children }: AppLayoutProps) {
           >
             <MenuIcon />
           </IconButton>
-          <Typography variant="h6" noWrap component="div">
-            {menuItems.find(item => item.path === location.pathname)?.text || 'Dashboard'}
-          </Typography>
+          <Box display="flex" justifyContent="space-between" alignItems="center" width="100%">
+            <Typography variant="h6" noWrap component="div">
+              {menuItems.find(item => item.path === location.pathname)?.text || 'Dashboard'}
+            </Typography>
+            {location.pathname !== '/projects' && (
+              <ProjectSelector onCreateClick={() => navigate('/projects')} />
+            )}
+          </Box>
         </Toolbar>
       </AppBar>
       <Box

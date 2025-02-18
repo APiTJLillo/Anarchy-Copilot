@@ -66,8 +66,15 @@ services:
       - anarchy
     command: >
       sh -c "
-        chmod +x /usr/local/bin/dev-entrypoint.sh &&
-        /usr/local/bin/dev-entrypoint.sh start
+        # Skip migrations for proxy container
+        exec python -m debugpy --listen 0.0.0.0:5678 \
+            -m uvicorn proxy.core:app \
+            --host 0.0.0.0 \
+            --port 8080 \
+            --reload \
+            --log-level debug \
+            --proxy-headers \
+            --timeout-keep-alive 75
       "
 
   frontend:
@@ -91,6 +98,12 @@ services:
         condition: service_started
     networks:
       - anarchy
+    healthcheck:
+      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:3000" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   nuclei:
     image: projectdiscovery/nuclei:v2.9.0

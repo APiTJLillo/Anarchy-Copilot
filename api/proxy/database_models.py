@@ -2,7 +2,7 @@
 from datetime import datetime
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, JSON, Boolean, Table, Text, Float
 from sqlalchemy.orm import relationship
-from models.base import Base
+from models.base import Base, Project
 
 class ProxySession(Base):
     """Model for tracking proxy sessions."""
@@ -23,7 +23,9 @@ class ProxySession(Base):
     settings = Column(JSON, default={})  # Stores ProxySettings as JSON
     
     # Relationships
-    project = relationship("Project", back_populates="proxy_sessions")
+    # Note: These are reversed relationships - we define them here since the base models can't see this module
+    project = relationship(Project, backref="proxy_sessions")
+    creator = relationship("models.base.User", backref="proxy_sessions", foreign_keys=[created_by])
     history_entries = relationship("ProxyHistoryEntry", back_populates="session")
     analysis_results = relationship("ProxyAnalysisResult", back_populates="session")
 

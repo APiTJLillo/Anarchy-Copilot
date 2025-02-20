@@ -3,11 +3,15 @@ import asyncio
 import errno
 import logging
 import socket
-from typing import Optional, Tuple, Any, Set
+from datetime import datetime
+from typing import Optional, Tuple, Any, Set, Dict
 from urllib.parse import unquote
 
 from uvicorn.protocols.http.h11_impl import H11Protocol
+from sqlalchemy import text, select
 import h11
+
+from database import AsyncSessionLocal
 
 logger = logging.getLogger("proxy.core")
 
@@ -19,16 +23,48 @@ class TunnelProtocol(H11Protocol):
         self._tunnel_tasks: Set[asyncio.Task] = set()
         self._remote_transport = None
         self._remote_protocol = None
+        self._tunnel_start_time: Optional[datetime] = None
+        self._history_entry_id: Optional[int] = None
+        self._connect_headers: Dict[str, str] = {}
+        self._host: Optional[str] = None
+        self._port: Optional[int] = None
 
     def connection_made(self, transport: Any) -> None:
         """Handle new connection."""
         super().connection_made(transport)
         self._transport = transport
 
+    async def _update_history_duration(self) -> None:
+        """Update history entry with connection duration."""
+        try:
+            if self._tunnel_start_time and self._history_entry_id:
+                end_time = datetime.utcnow()
+                duration = (end_time - self._tunnel_start_time).total_seconds()
+
+                async with AsyncSessionLocal() as db:
+                    await db.execute(
+                        text("""
+                        UPDATE proxy_history 
+                        SET duration = :duration,
+                            notes = notes || ' (Connection closed)'
+                        WHERE id = :id
+                        """),
+                        {"duration": duration, "id": self._history_entry_id}
+                    )
+                    await db.commit()
+                    logger.debug(f"Updated history entry {self._history_entry_id} with duration {duration:.2f}s")
+        except Exception as e:
+            logger.error(f"Failed to update history duration: {e}")
+
     def connection_lost(self, exc: Optional[Exception]) -> None:
         """Handle connection lost."""
         if self._remote_transport:
             self._remote_transport.close()
+
+        # Update history entry with duration
+        if self._tunnel_start_time and self._history_entry_id:
+            asyncio.create_task(self._update_history_duration())
+            
         super().connection_lost(exc)
 
     def data_received(self, data: bytes) -> None:
@@ -77,6 +113,12 @@ class TunnelProtocol(H11Protocol):
                     host = target.split(":")[0]  # Extract host from target
                     headers.append((b"host", host.encode()))
                 
+                # Store headers for history recording
+                self._connect_headers = {
+                    name.decode(): value.decode()
+                    for name, value in headers
+                }
+                
                 # Create h11 request
                 logger.debug(f"Creating CONNECT request for {target} with headers: {headers}")
                 request = h11.Request(
@@ -109,6 +151,8 @@ class TunnelProtocol(H11Protocol):
             try:
                 logger.debug(f"TunnelProtocol received CONNECT request: {request.target.decode()}")
                 host, port = self._parse_authority(request.target.decode())
+                self._host = host
+                self._port = port
                 logger.debug(f"TunnelProtocol establishing tunnel to {host}:{port}")
                 await self._handle_connect(host, port)
             except asyncio.CancelledError:
@@ -146,6 +190,51 @@ class TunnelProtocol(H11Protocol):
                 host=host,
                 port=port
             )
+
+            # Record HTTPS connection in proxy history
+            self._tunnel_start_time = datetime.utcnow()
+            
+            try:
+                # Import models here to avoid circular imports
+                from api.proxy.database_models import ProxySession, ProxyHistoryEntry
+                
+                # Get active session
+                async with AsyncSessionLocal() as db:
+                    # Use proper SQLAlchemy session query
+                    result = await db.execute(
+                        select(ProxySession)
+                        .where(ProxySession.is_active == True)
+                        .order_by(ProxySession.start_time.desc())
+                        .limit(1)
+                    )
+                    active_session = result.scalar_one_or_none()
+                    
+                    if active_session:
+                        # Create history entry
+                        history_entry = ProxyHistoryEntry(
+                            session_id=active_session.id,
+                            timestamp=self._tunnel_start_time,
+                            method="CONNECT",
+                            url=f"https://{host}:{port}",
+                            request_headers=self._connect_headers,
+                            request_body=None,
+                            response_status=200,
+                            response_headers={"Connection": "keep-alive"},
+                            response_body=None,
+                            duration=None,  # Will be updated when connection closes
+                            is_intercepted=False,
+                            tags=["HTTPS"],
+                            notes=f"HTTPS tunnel established to {host}:{port}"
+                        )
+                        
+                        db.add(history_entry)
+                        await db.commit()
+                        await db.refresh(history_entry)
+                        self._history_entry_id = history_entry.id
+                        logger.debug(f"Recorded HTTPS tunnel in history: {host}:{port} (ID: {self._history_entry_id})")
+            except Exception as e:
+                logger.error(f"Failed to record history: {e}")
+                # Continue even if history recording fails
 
             logger.debug(f"Remote connect success for {host}:{port}")
 

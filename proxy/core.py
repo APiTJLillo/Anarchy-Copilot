@@ -11,8 +11,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .config import ProxyConfig
+from .server.proxy_server import ProxyServer  # Import directly from the module
 from .server import (
-    ProxyServer,
     LoggingMiddleware,
     proxy_middleware,
     ProxyResponse,
@@ -71,7 +71,7 @@ logger.info("Loaded proxy configuration: host=%s, port=%d, cert=%s, key=%s",
            host, port, ca_cert, ca_key)
 
 # Global proxy server instance
-proxy_server: Optional[ProxyServer] = None
+proxy_server = None
 
 class ProxyASGIMiddleware(BaseHTTPMiddleware):
     """ASGI middleware for handling proxy requests."""
@@ -182,6 +182,9 @@ async def api_shutdown():
         logger.info("API cleanup complete")
     except Exception as e:
         logger.error("API cleanup error: %s", str(e), exc_info=True)
+
+# Re-export ProxyServer to avoid circular imports
+__all__ = ["ProxyServer"]
 
 # For direct execution
 if __name__ == "__main__":

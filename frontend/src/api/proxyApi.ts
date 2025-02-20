@@ -54,8 +54,18 @@ class ProxyApi {
     }
 
     async getHistory(): Promise<any[]> {
-        const response = await axios.get(`${this.baseUrl}/history`);
-        return response.data;
+        try {
+            console.log('ProxyAPI: Fetching history from', `${this.baseUrl}/history`);
+            const response = await axios.get(`${this.baseUrl}/history`);
+            console.log('ProxyAPI: History response:', response.data);
+            return response.data;
+        } catch (error) {
+            console.error('ProxyAPI: Failed to fetch history:', error);
+            if (axios.isAxiosError(error)) {
+                console.error('ProxyAPI: Response:', error.response?.data);
+            }
+            throw error;
+        }
     }
 
     async clearAnalysisResults(): Promise<void> {

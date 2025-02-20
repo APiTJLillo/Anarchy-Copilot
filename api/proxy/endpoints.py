@@ -9,19 +9,22 @@ from fastapi import HTTPException, Body, Depends, WebSocket, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
-from starlette.responses import JSONResponse
 
-from typing import cast
-import proxy.core
+from .utils import cleanup_port
+from proxy.server.proxy_server import ProxyServer  # Import directly from module
 from proxy.config import ProxyConfig
 from database import get_async_session
 from models.base import Project
 from . import router, get_proxy_server
-from .database_models import ProxySession
-from .models import (CreateProxySession, ProxySessionResponse)
-
-# Initialize ProxyServer lazily to avoid circular imports
-from proxy.core import ProxyServer
+from .database_models import ProxySession, ProxyHistoryEntry
+from .models import (
+    CreateProxySession, 
+    ProxySessionResponse, 
+    ProxySettings, 
+    InterceptedRequest,
+    InterceptedResponse,
+    HistoryEntryResponse
+)
 
 __all__ = [
     "get_proxy_status",
@@ -46,15 +49,6 @@ logger = logging.getLogger(__name__)
 
 # Use get_proxy_server to access the global instance
 proxy_server = get_proxy_server()
-
-# Import models after state initialization to avoid circular imports
-from .models import (
-    ProxySettings, 
-    InterceptedRequest, 
-    InterceptedResponse,
-    HistoryEntryResponse
-)
-from .utils import cleanup_port
 
 async def get_project_by_id(session: AsyncSession, project_id: int) -> Project:
     """Get project by ID or raise 404."""
@@ -231,24 +225,38 @@ async def get_proxy_status(
 
 @router.get("/history", response_model=List[HistoryEntryResponse])
 async def get_proxy_history(
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_async_session),
+    limit: int = 100,
+    offset: int = 0
 ) -> List[HistoryEntryResponse]:
     """Get proxy request/response history."""
-    logger.debug("Proxy history endpoint called")
+    logger.debug("Proxy history endpoint called with limit=%d offset=%d", limit, offset)
     
-    result = await db.execute(
-        select(ProxySession)
-        .options(selectinload(ProxySession.history_entries))
-        .order_by(ProxySession.start_time.desc())
-    )
-    sessions = result.scalars().all()
-    
-    history_entries = []
-    for session in sessions:
-        for entry in session.history_entries:
-            history_entries.append(HistoryEntryResponse.from_entry(entry))
-    
-    return history_entries
+    try:
+        # Get history entries directly, with pagination
+        query = (
+            select(ProxyHistoryEntry)
+            .order_by(ProxyHistoryEntry.timestamp.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        
+        logger.debug("Executing query: %s", query)
+        result = await db.execute(query)
+        entries = result.scalars().all()
+        logger.debug("Found %d history entries", len(entries))
+
+        response_data = [HistoryEntryResponse.from_entry(entry) for entry in entries]
+        logger.debug("Returning %d formatted entries", len(response_data))
+        
+        return response_data
+
+    except Exception as e:
+        logger.error("Error fetching proxy history: %s", str(e), exc_info=True)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch proxy history: {str(e)}"
+        )
 
 @router.get("/settings", response_model=Dict[str, Any])
 async def get_proxy_settings(

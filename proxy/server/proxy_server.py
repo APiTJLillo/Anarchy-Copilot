@@ -8,14 +8,17 @@ import os
 import psutil
 import uvicorn
 from pathlib import Path
-from typing import Dict, List, Optional, Any, Tuple, Callable
+from typing import Dict, List, Optional, Any, Tuple, Callable, TYPE_CHECKING
 from urllib.parse import urlparse
 from uuid import uuid4
 from sqlalchemy import text
+from datetime import datetime
 
 from database import AsyncSessionLocal
-
 from ..config import ProxyConfig
+
+if TYPE_CHECKING:
+    from api.proxy.database_models import ProxyHistoryEntry, ProxySession as DBProxySession
 from .custom_protocol import TunnelProtocol
 from ..interceptor import RequestInterceptor, ResponseInterceptor, InterceptedRequest, InterceptedResponse
 from ..encoding import ContentEncodingInterceptor
@@ -162,17 +165,29 @@ class ProxyServer:
             self._host = host
 
         # Initialize database
-        if not self._db_initialized:
-            try:
-                async_session = AsyncSessionLocal()
-                async with async_session as session:
-                    await session.execute(text("SELECT 1"))
-                    logger.info("Database connection established")
-                    self._db_initialized = True
-                    await session.close()
-            except Exception as e:
-                logger.warning(f"Database initialization failed: {e}", exc_info=True)
-                logger.warning("Proxy will run without database functionality")
+        # Initialize database connection
+        try:
+            logger.info("Initializing database connection...")
+            async with AsyncSessionLocal() as session:
+                # First check if proxy_history table exists
+                # First check if tables exist
+                result = await session.execute(
+                    text("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='proxy_history'")
+                )
+                tables_count = result.scalar()  # Not awaited - returns directly
+                if not tables_count:
+                    logger.error("Database tables not found - migrations may not have been run")
+                    raise RuntimeError("Database tables not found - please run migrations first")
+
+                # Now test querying the table
+                result = await session.execute(text("SELECT COUNT(*) FROM proxy_history"))
+                count = result.scalar()  # Not awaited - returns directly
+                logger.info("Database connection test successful - found %d history entries", count)
+            self._db_initialized = True
+            logger.info("Database initialization completed")
+        except Exception as e:
+            logger.error("Database initialization failed: %s", str(e), exc_info=True)
+            raise RuntimeError("Failed to initialize database connection") from e
 
         try:
             # Attempt to clean up any existing processes using the port
@@ -313,6 +328,8 @@ class ProxyServer:
 
     async def handle_request(self, scope: dict, receive: Callable, send: Callable) -> Optional[ProxyResponse]:
         """Handle an incoming request."""
+        start_time = datetime.utcnow()
+        
         if not self._is_running:
             return ProxyResponse(
                 status_code=503,
@@ -329,6 +346,21 @@ class ProxyServer:
         try:
             # Process regular HTTP request
             logger.debug(f"ProxyServer handling HTTP {method} request")
+            
+            # Get active session from database
+            async with AsyncSessionLocal() as db:
+                try:
+                    result = await db.execute(
+                        text("SELECT * FROM proxy_sessions WHERE is_active = true ORDER BY start_time DESC LIMIT 1")
+                    )
+                    active_session = result.first()  # Not awaited - returns directly
+                    if active_session:
+                        logger.debug(f"Found active session: {active_session.id}")
+                    else:
+                        logger.warning("No active proxy session found")
+                except Exception as e:
+                    logger.error("Error querying active session: %s", str(e), exc_info=True)
+                    active_session = None
 
             # Extract info for regular HTTP request
             method, host, path = self._extract_request_info(scope)
@@ -359,16 +391,57 @@ class ProxyServer:
 
                 # Forward regular HTTP request
                 async with self.session.request(request) as aiohttp_response:
+                    response_body = await aiohttp_response.read()
+                    
                     # Create intercepted response object
                     response = InterceptedResponse(
                         status_code=aiohttp_response.status,
                         headers=dict(aiohttp_response.headers),
-                        body=await aiohttp_response.read()
+                        body=response_body
                     )
 
                     # Run response interceptors
                     for interceptor in self._response_interceptors:
                         response = await interceptor.intercept(response, request)
+                    
+                    # Store request/response in database if we have an active session
+                    if active_session:
+                        end_time = datetime.utcnow()
+                        duration = (end_time - start_time).total_seconds()
+                        
+                        try:
+                            # Import here to avoid circular import
+                            from api.proxy.database_models import ProxyHistoryEntry
+                            
+                            history_entry = ProxyHistoryEntry(
+                                session_id=active_session.id,
+                                timestamp=start_time,  # Use the captured start time
+                                method=request.method,
+                                url=request.url,
+                                request_headers=request.headers,
+                                request_body=request.body.decode('utf-8', errors='ignore') if request.body else None,
+                                response_status=response.status_code,
+                                response_headers=response.headers,
+                                response_body=response.body.decode('utf-8', errors='ignore') if response.body else None,
+                                duration=duration,
+                                is_intercepted=bool(self._request_interceptors or self._response_interceptors),
+                                tags=[],
+                                notes=None
+                            )
+                            
+                            logger.debug(f"Saving history entry: method={request.method} url={request.url}")
+                            async with AsyncSessionLocal() as db:
+                                try:
+                                    await db.begin()
+                                    db.add(history_entry)
+                                    await db.commit()
+                                    logger.debug("Successfully saved history entry")
+                                except Exception as db_error:
+                                    logger.error(f"Database error while saving history: {db_error}")
+                                    await db.rollback()
+                                    raise
+                        except Exception as e:
+                            logger.error(f"Failed to store proxy history: {e}", exc_info=True)
                     
                     # Send response through ASGI
                     return ProxyResponse(

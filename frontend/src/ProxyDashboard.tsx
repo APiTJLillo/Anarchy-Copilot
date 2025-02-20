@@ -101,12 +101,14 @@ export const ProxyDashboard: React.FC = () => {
 
   const fetchHistory = useCallback(async () => {
     try {
+      console.log('Fetching proxy history...');
       const data = await proxyApi.getHistory();
+      console.log('Received history data:', data);
       setHistory(data);
       setError(null);
     } catch (err) {
+      console.error('Failed to fetch proxy history:', err);
       setError('Failed to fetch proxy history');
-      console.error(err);
     }
   }, []);
 
@@ -205,24 +207,61 @@ export const ProxyDashboard: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const init = async () => {
-      setLoading(true);
-      await fetchStatus();
-      await fetchHistory();
-      await fetchAnalysisResults();
-      setLoading(false);
+    let mounted = true;
+    let pollId: NodeJS.Timeout | null = null;
+
+    const pollData = async () => {
+      if (!mounted) return;
+      console.log('Polling for updates...');
+
+      try {
+        await Promise.all([
+          fetchStatus(),
+          fetchHistory(),
+          fetchAnalysisResults()
+        ]);
+      } catch (error) {
+        console.error('Error during polling:', error);
+      }
+
+      if (mounted) {
+        // Schedule next poll only if still mounted
+        pollId = setTimeout(pollData, 5000);
+      }
     };
+
+    // Initial load
+    const init = async () => {
+      if (!mounted) return;
+      setLoading(true);
+
+      try {
+        await Promise.all([
+          fetchStatus(),
+          fetchHistory(),
+          fetchAnalysisResults()
+        ]);
+      } catch (error) {
+        console.error('Error during initial load:', error);
+      }
+
+      if (mounted) {
+        setLoading(false);
+        // Start polling after initial load
+        pollId = setTimeout(pollData, 5000);
+      }
+    };
+
     init();
 
-    // Poll for updates
-    const intervalId = setInterval(() => {
-      fetchStatus();
-      fetchHistory();
-      fetchAnalysisResults();
-    }, 5000);
-
-    return () => clearInterval(intervalId);
-  }, [fetchStatus, fetchAnalysisResults]);
+    return () => {
+      mounted = false;
+      if (pollId) {
+        clearTimeout(pollId);
+      }
+      console.log('Cleanup: polling stopped');
+    };
+  }, [fetchStatus, fetchHistory, fetchAnalysisResults]);
 
   if (loading) {
     return (
@@ -315,19 +354,60 @@ export const ProxyDashboard: React.FC = () => {
                       ) : (
                         <ul>
                           {history.map((entry, index) => (
-                            <li key={index}>
-                              <strong>{entry.method}</strong> {entry.url}
-                              <br />
-                              <em>Status:</em> {entry.response_status}
-                              <br />
-                              <em>Request Headers:</em> {JSON.stringify(entry.request_headers)}
-                              <br />
-                              <em>Response Headers:</em> {JSON.stringify(entry.response_headers)}
-                              <br />
-                              <em>Request Body:</em> {entry.request_body}
-                              <br />
-                              <em>Response Body:</em> {entry.response_body}
-                            </li>
+                            <Paper key={index} elevation={2} sx={{ p: 2, mb: 2, overflowX: 'auto' }}>
+                              <Typography variant="subtitle1" sx={{ mb: 1 }}>
+                                <strong>{entry.method}</strong> {entry.url}
+                              </Typography>
+                              <Box sx={{ display: 'flex', gap: 2, mb: 1 }}>
+                                <Typography>
+                                  <em>Status:</em> {entry.response_status}
+                                </Typography>
+                                <Typography>
+                                  <em>Duration:</em> {entry.duration ? `${(entry.duration * 1000).toFixed(2)}ms` : 'N/A'}
+                                </Typography>
+                                {entry.is_intercepted && (
+                                  <Typography color="primary">
+                                    Intercepted
+                                  </Typography>
+                                )}
+                              </Box>
+                              <Box sx={{ mb: 1 }}>
+                                <Typography variant="subtitle2">Request Headers:</Typography>
+                                <pre style={{ margin: 0, fontSize: '0.875rem' }}>
+                                  {JSON.stringify(entry.request_headers, null, 2)}
+                                </pre>
+                              </Box>
+                              {entry.request_body && (
+                                <Box sx={{ mb: 1 }}>
+                                  <Typography variant="subtitle2">Request Body:</Typography>
+                                  <pre style={{ margin: 0, fontSize: '0.875rem' }}>
+                                    {typeof entry.request_body === 'string'
+                                      ? entry.request_body
+                                      : JSON.stringify(entry.request_body, null, 2)
+                                    }
+                                  </pre>
+                                </Box>
+                              )}
+                              {entry.response_headers && (
+                                <Box sx={{ mb: 1 }}>
+                                  <Typography variant="subtitle2">Response Headers:</Typography>
+                                  <pre style={{ margin: 0, fontSize: '0.875rem' }}>
+                                    {JSON.stringify(entry.response_headers, null, 2)}
+                                  </pre>
+                                </Box>
+                              )}
+                              {entry.response_body && (
+                                <Box sx={{ mb: 1 }}>
+                                  <Typography variant="subtitle2">Response Body:</Typography>
+                                  <pre style={{ margin: 0, fontSize: '0.875rem', maxHeight: '200px', overflow: 'auto' }}>
+                                    {typeof entry.response_body === 'string'
+                                      ? entry.response_body
+                                      : JSON.stringify(entry.response_body, null, 2)
+                                    }
+                                  </pre>
+                                </Box>
+                              )}
+                            </Paper>
                           ))}
                         </ul>
                       )}

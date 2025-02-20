@@ -30,7 +30,8 @@ class User(Base):
     projects = relationship("Project", secondary=project_collaborators, back_populates="collaborators")
     assigned_vulnerabilities = relationship("Vulnerability", back_populates="assigned_user")
     authored_reports = relationship("Report", back_populates="author")
-
+    # ProxySession relationship is defined in api.proxy.database_models
+    
 class Project(Base):
     __tablename__ = "projects"
 
@@ -51,4 +52,4 @@ class Project(Base):
     recon_results = relationship("ReconResult", back_populates="project")
     vulnerabilities = relationship("Vulnerability", back_populates="project")
     reports = relationship("Report", back_populates="project")
-    proxy_sessions = relationship("ProxySession", back_populates="project")
+    # ProxySession relationship is defined in api.proxy.database_models

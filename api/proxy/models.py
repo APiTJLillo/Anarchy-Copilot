@@ -3,8 +3,10 @@ from typing import Dict, List, Optional, Any
 from datetime import datetime
 from pydantic import BaseModel, Field, validator, ConfigDict
 
-from proxy.session import HistoryEntry
-from api.proxy.database_models import ProxySession as DBProxySession
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from api.proxy.database_models import ProxySession as DBProxySession, ProxyHistoryEntry
 
 class CreateProxySession(BaseModel):
     """Model for creating a new proxy session."""
@@ -27,7 +29,7 @@ class ProxySessionResponse(BaseModel):
     created_by: int
 
     @classmethod
-    def from_db(cls, session: DBProxySession) -> "ProxySessionResponse":
+    def from_db(cls, session: 'DBProxySession') -> "ProxySessionResponse":
         """Create response model from database model."""
         return cls(
             id=session.id,
@@ -102,25 +104,39 @@ class NoteData(BaseModel):
 
 class HistoryEntryResponse(BaseModel):
     """API response model for history entries."""
-    id: str
-    timestamp: str
-    request: Dict[str, Any]
-    response: Optional[Dict[str, Any]]
+    id: int
+    timestamp: datetime
+    method: str
+    url: str
+    request_headers: Dict[str, Any]
+    request_body: Optional[str]
+    response_status: Optional[int]
+    response_headers: Optional[Dict[str, Any]]
+    response_body: Optional[str]
     duration: Optional[float]
     tags: List[str]
     notes: Optional[str]
+    is_intercepted: bool
+    session_id: int
 
     @classmethod
-    def from_entry(cls, entry: HistoryEntry) -> "HistoryEntryResponse":
-        """Create response model from history entry."""
+    def from_entry(cls, entry: 'ProxyHistoryEntry') -> 'HistoryEntryResponse':
+        """Create response model from database history entry."""
         return cls(
             id=entry.id,
-            timestamp=entry.timestamp.isoformat(),
-            request=entry.request.to_dict(),
-            response=entry.response.to_dict() if entry.response else None,
+            timestamp=entry.timestamp,
+            method=entry.method,
+            url=entry.url,
+            request_headers=entry.request_headers,
+            request_body=entry.request_body,
+            response_status=entry.response_status,
+            response_headers=entry.response_headers,
+            response_body=entry.response_body,
             duration=entry.duration,
-            tags=list(entry.tags),
-            notes=entry.notes
+            tags=entry.tags or [],
+            notes=entry.notes,
+            is_intercepted=entry.is_intercepted,
+            session_id=entry.session_id
         )
 
 __all__ = [

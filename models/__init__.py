@@ -13,9 +13,6 @@ from .vulnerability import (
     SeverityLevel, VulnerabilityStatus
 )
 
-# Import proxy models last to avoid circular imports
-from api.proxy.database_models import ProxySession, ProxyHistoryEntry
-
 __all__ = [
     # Base models
     'Base', 'User', 'Project', 'project_collaborators',
@@ -27,8 +24,5 @@ __all__ = [
     'Vulnerability', 'VulnerabilityComment', 'VulnerabilityResult',
     'VulnerabilityScan', 'Tag', 'Report',
     'vulnerability_tags', 'report_vulnerabilities',
-    'SeverityLevel', 'VulnerabilityStatus',
-    
-    # Proxy models
-    'ProxySession', 'ProxyHistoryEntry'
+    'SeverityLevel', 'VulnerabilityStatus'
 ]

@@ -11,10 +11,17 @@ import {
   Tabs,
   Tab,
   FormControlLabel,
-  Checkbox
+  Checkbox,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow
 } from '@mui/material';
 import { InterceptorView } from './components/proxy/InterceptorView';
 import { WebSocketView } from './components/proxy/WebSocketView';
+import { RequestModal } from './components/proxy/RequestModal';
 import { ProxyProvider } from './components/proxy/ProxyContext';
 import AnalysisResults from './components/proxy/AnalysisResults';
 import { proxyApi, ProxySession, ProxySettings } from './api/proxyApi';
@@ -62,6 +69,9 @@ const TabPanel: React.FC<TabPanelProps> = (props) => {
 };
 
 export const ProxyDashboard: React.FC = () => {
+  const [selectedRequest, setSelectedRequest] = useState<any>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [currentRequestIndex, setCurrentRequestIndex] = useState<number>(0);
   const [status, setStatus] = useState<ProxyStatus | null>(null);
   const [session, setSession] = useState<ProxySession | null>(null);
   const [analysisResults, setAnalysisResults] = useState<AnalysisResult[]>([]);
@@ -86,6 +96,11 @@ export const ProxyDashboard: React.FC = () => {
 
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
     setTabValue(newValue);
+  };
+
+  const handleRequestNavigate = (index: number) => {
+    setCurrentRequestIndex(index);
+    setSelectedRequest(history[index]);
   };
 
   const fetchStatus = useCallback(async () => {
@@ -318,122 +333,106 @@ export const ProxyDashboard: React.FC = () => {
         </Grid>
 
         {/* Main Content */}
-        {status?.isRunning && (
-          <Grid item xs={12}>
-            <Paper>
-              <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
-                <Tabs value={tabValue} onChange={handleTabChange} aria-label="proxy tabs">
-                  <Tab label="HTTP/HTTPS" />
-                  <Tab label="WebSocket" />
-                  <Tab label="Analysis" />
-                </Tabs>
-              </Box>
+        <Grid item xs={12}>
+          <Paper>
+            <Box sx={{ borderBottom: 1, borderColor: 'divider' }}>
+              <Tabs value={tabValue} onChange={handleTabChange} aria-label="proxy tabs">
+                <Tab label="HTTP/HTTPS" />
+                <Tab label="WebSocket" />
+                <Tab label="Analysis" />
+              </Tabs>
+            </Box>
 
-              <TabPanel value={tabValue} index={0}>
-                <Grid container spacing={3}>
-                  <Grid item xs={12} md={6}>
-                    <ProxyProvider>
-                      <Paper sx={{ p: 2 }}>
-                        <Typography variant="body1" align="center">
-                          Waiting for requests to intercept...
-                          The interceptor will open automatically when requests are captured.
-                        </Typography>
-                      </Paper>
-                    </ProxyProvider>
-                  </Grid>
-
-                  <Grid item xs={12} md={6}>
+            <TabPanel value={tabValue} index={0}>
+              <Grid container spacing={3}>
+                <Grid item xs={12} md={6}>
+                  <ProxyProvider>
                     <Paper sx={{ p: 2 }}>
-                      <Typography variant="h6" align="center">
-                        Proxy History
+                      <Typography variant="body1" align="center">
+                        Waiting for requests to intercept...
+                        The interceptor will open automatically when requests are captured.
                       </Typography>
-                      {history.length === 0 ? (
-                        <Typography variant="body1" align="center">
-                          No history available.
-                        </Typography>
-                      ) : (
-                        <ul>
-                          {history.map((entry, index) => (
-                            <Paper key={index} elevation={2} sx={{ p: 2, mb: 2, overflowX: 'auto' }}>
-                              <Typography variant="subtitle1" sx={{ mb: 1 }}>
-                                <strong>{entry.method}</strong> {entry.url}
-                              </Typography>
-                              <Box sx={{ display: 'flex', gap: 2, mb: 1 }}>
-                                <Typography>
-                                  <em>Status:</em> {entry.response_status}
-                                </Typography>
-                                <Typography>
-                                  <em>Duration:</em> {entry.duration ? `${(entry.duration * 1000).toFixed(2)}ms` : 'N/A'}
-                                </Typography>
-                                {entry.is_intercepted && (
-                                  <Typography color="primary">
-                                    Intercepted
-                                  </Typography>
-                                )}
-                              </Box>
-                              <Box sx={{ mb: 1 }}>
-                                <Typography variant="subtitle2">Request Headers:</Typography>
-                                <pre style={{ margin: 0, fontSize: '0.875rem' }}>
-                                  {JSON.stringify(entry.request_headers, null, 2)}
-                                </pre>
-                              </Box>
-                              {entry.request_body && (
-                                <Box sx={{ mb: 1 }}>
-                                  <Typography variant="subtitle2">Request Body:</Typography>
-                                  <pre style={{ margin: 0, fontSize: '0.875rem' }}>
-                                    {typeof entry.request_body === 'string'
-                                      ? entry.request_body
-                                      : JSON.stringify(entry.request_body, null, 2)
-                                    }
-                                  </pre>
-                                </Box>
-                              )}
-                              {entry.response_headers && (
-                                <Box sx={{ mb: 1 }}>
-                                  <Typography variant="subtitle2">Response Headers:</Typography>
-                                  <pre style={{ margin: 0, fontSize: '0.875rem' }}>
-                                    {JSON.stringify(entry.response_headers, null, 2)}
-                                  </pre>
-                                </Box>
-                              )}
-                              {entry.response_body && (
-                                <Box sx={{ mb: 1 }}>
-                                  <Typography variant="subtitle2">Response Body:</Typography>
-                                  <pre style={{ margin: 0, fontSize: '0.875rem', maxHeight: '200px', overflow: 'auto' }}>
-                                    {typeof entry.response_body === 'string'
-                                      ? entry.response_body
-                                      : JSON.stringify(entry.response_body, null, 2)
-                                    }
-                                  </pre>
-                                </Box>
-                              )}
-                            </Paper>
-                          ))}
-                        </ul>
-                      )}
                     </Paper>
-                  </Grid>
+                  </ProxyProvider>
                 </Grid>
-              </TabPanel>
 
-              <TabPanel value={tabValue} index={1}>
-                <Grid container spacing={3}>
-                  <Grid item xs={12}>
-                    <WebSocketView />
-                  </Grid>
-                </Grid>
-              </TabPanel>
+                <Grid item xs={12} md={6}>
+                  <Paper sx={{ p: 2 }}>
+                    <Typography variant="h6" align="center">
+                      Proxy History
+                    </Typography>
+                    {history.length === 0 ? (
+                      <Typography variant="body1" align="center">
+                        No history available.
+                      </Typography>
+                    ) : (
+                      <TableContainer>
+                        <Table size="small">
+                          <TableHead>
+                            <TableRow>
+                              <TableCell>Method</TableCell>
+                              <TableCell>URL</TableCell>
+                              <TableCell>Status</TableCell>
+                              <TableCell>Duration</TableCell>
+                              <TableCell>Intercepted</TableCell>
+                            </TableRow>
+                          </TableHead>
+                          <TableBody>
+                            {history.map((entry, index) => (
+                              <TableRow
+                                key={index}
+                                hover
+                                onClick={() => {
+                                  setSelectedRequest(entry);
+                                  setModalOpen(true);
+                                  setCurrentRequestIndex(index);
+                                }}
+                                sx={{ cursor: 'pointer' }}
+                              >
+                                <TableCell>{entry.method}</TableCell>
+                                <TableCell sx={{ maxWidth: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                  {entry.url}
+                                </TableCell>
+                                <TableCell>{entry.response_status}</TableCell>
+                                <TableCell>{entry.duration ? `${(entry.duration * 1000).toFixed(2)}ms` : 'N/A'}</TableCell>
+                                <TableCell>{entry.is_intercepted ? 'Yes' : 'No'}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </TableContainer>
+                    )}
 
-              <TabPanel value={tabValue} index={2}>
-                <Grid container spacing={3}>
-                  <Grid item xs={12}>
-                    <AnalysisResults results={analysisResults} />
-                  </Grid>
+                    <RequestModal
+                      open={modalOpen}
+                      onClose={() => setModalOpen(false)}
+                      request={selectedRequest}
+                      history={history}
+                      currentIndex={currentRequestIndex}
+                      onNavigate={handleRequestNavigate}
+                    />
+                  </Paper>
                 </Grid>
-              </TabPanel>
-            </Paper>
-          </Grid>
-        )}
+              </Grid>
+            </TabPanel>
+
+            <TabPanel value={tabValue} index={1}>
+              <Grid container spacing={3}>
+                <Grid item xs={12}>
+                  <WebSocketView />
+                </Grid>
+              </Grid>
+            </TabPanel>
+
+            <TabPanel value={tabValue} index={2}>
+              <Grid container spacing={3}>
+                <Grid item xs={12}>
+                  <AnalysisResults results={analysisResults} />
+                </Grid>
+              </Grid>
+            </TabPanel>
+          </Paper>
+        </Grid>
       </Grid>
     </Box>
   );

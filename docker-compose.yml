@@ -6,6 +6,8 @@ services:
     volumes:
       - .:/app
       - test-cache:/root/.cache
+    env_file:
+      - .env
     environment:
       - PYTHONPATH=/app
       - PYTHONDONTWRITEBYTECODE=1
@@ -32,7 +34,9 @@ services:
       - NUCLEI_TEMPLATES=/root/.nuclei/templates
       - PYTHONDONTWRITEBYTECODE=1
       - PYTHONUNBUFFERED=1
-      - DISABLE_HTTPS=1 # Explicitly disable HTTPS
+      - DISABLE_HTTPS=0
+    env_file:
+      - .env
     networks:
       - anarchy
     command: [ "/usr/local/bin/dev-entrypoint.sh", "start" ]
@@ -49,11 +53,8 @@ services:
       dockerfile: Dockerfile.dev
     volumes:
       - .:/app
-      - proxy-certs:/app/certs
+      - ./certs:/app/certs
       - proxy-data:/app/data
-    ports:
-      - "8080:8080" # Proxy
-      - "5679:5678" # Debug
     environment:
       - PYTHONPATH=/app:/app/anarchy-copilot
       - PROXY_HOST=0.0.0.0
@@ -62,19 +63,25 @@ services:
       - CA_KEY_PATH=/app/certs/ca.key
       - PYTHONDONTWRITEBYTECODE=1
       - PYTHONUNBUFFERED=1
-    networks:
-      - anarchy
+    network_mode: "host" # Allow direct external connections for proxy traffic
+    dns:
+      - 8.8.8.8 # Use Google's DNS
+      - 1.1.1.1 # Use Cloudflare's DNS as backup
     command: >
       sh -c "
         # Skip migrations for proxy container
-        exec python -m debugpy --listen 0.0.0.0:5678 \
+        exec python -m debugpy --listen 0.0.0.0:5679 \
             -m uvicorn proxy.core:app \
             --host 0.0.0.0 \
             --port 8080 \
             --reload \
+            --reload-delay 2 \
             --log-level debug \
             --proxy-headers \
-            --timeout-keep-alive 75
+            --timeout-keep-alive 75 \
+            --forwarded-allow-ips='*' \
+            --lifespan on \
+            --use-colors
       "
 
   frontend:
@@ -89,7 +96,7 @@ services:
     environment:
       - NODE_ENV=development
       - REACT_APP_API_BASE_URL=http://dev:8000 # Use Docker DNS resolution
-      - REACT_APP_PROXY_URL=http://proxy:8080 # Use Docker DNS resolution
+      - REACT_APP_PROXY_URL=http://localhost:8080 # Connect to proxy on host network
       - WDS_SOCKET_PORT=3000
     depends_on:
       dev:

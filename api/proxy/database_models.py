@@ -2,7 +2,7 @@
 from datetime import datetime
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, JSON, Boolean, Table, Text, Float
 from sqlalchemy.orm import relationship
-from database import Base
+from models.base import Base
 
 class ProxySession(Base):
     """Model for tracking proxy sessions."""

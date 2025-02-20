@@ -1,25 +1,34 @@
 """Models package."""
+# Base models
 from .base import Base, User, Project, project_collaborators
-from .recon import ReconResult
+
+# Recon models
+from .recon import ReconResult, ReconTarget, ReconModule
+
+# Vulnerability models
 from .vulnerability import (
-    Vulnerability, VulnerabilityComment, Tag, Report,
+    Vulnerability, VulnerabilityComment, VulnerabilityResult, 
+    VulnerabilityScan, Tag, Report,
     vulnerability_tags, report_vulnerabilities,
     SeverityLevel, VulnerabilityStatus
 )
-from api.proxy.database_models import ProxySession
+
+# Import proxy models last to avoid circular imports
+from api.proxy.database_models import ProxySession, ProxyHistoryEntry
 
 __all__ = [
     # Base models
     'Base', 'User', 'Project', 'project_collaborators',
     
     # Recon models
-    'ReconResult',
+    'ReconResult', 'ReconTarget', 'ReconModule',
     
     # Vulnerability models
-    'Vulnerability', 'VulnerabilityComment', 'Tag', 'Report',
+    'Vulnerability', 'VulnerabilityComment', 'VulnerabilityResult',
+    'VulnerabilityScan', 'Tag', 'Report',
     'vulnerability_tags', 'report_vulnerabilities',
     'SeverityLevel', 'VulnerabilityStatus',
     
     # Proxy models
-    'ProxySession'
+    'ProxySession', 'ProxyHistoryEntry'
 ]

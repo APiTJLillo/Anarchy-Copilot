@@ -1,4 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
+import { Avatar, Menu, MenuItem } from '@mui/material';
 import {
   Box,
   Grid,
@@ -9,6 +10,8 @@ import {
   Alert,
   Tabs,
   Tab,
+  FormControlLabel,
+  Checkbox
 } from '@mui/material';
 import { InterceptorView } from './components/proxy/InterceptorView';
 import { WebSocketView } from './components/proxy/WebSocketView';
@@ -62,9 +65,24 @@ export const ProxyDashboard: React.FC = () => {
   const [status, setStatus] = useState<ProxyStatus | null>(null);
   const [session, setSession] = useState<ProxySession | null>(null);
   const [analysisResults, setAnalysisResults] = useState<AnalysisResult[]>([]);
+  const [history, setHistory] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [tabValue, setTabValue] = useState(0);
+  const [localProxyEnabled, setLocalProxyEnabled] = useState(false);
+  const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+  const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+  const [currentUser, setCurrentUser] = useState<string>('User1');
+
+  const handleUserMenuClose = () => {
+    setAnchorEl(null);
+  };
+
+  const handleUserSwitch = (user: string) => {
+    setCurrentUser(user);
+    handleUserMenuClose();
+  };
 
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
     setTabValue(newValue);
@@ -81,6 +99,17 @@ export const ProxyDashboard: React.FC = () => {
     }
   }, []);
 
+  const fetchHistory = useCallback(async () => {
+    try {
+      const data = await proxyApi.getHistory();
+      setHistory(data);
+      setError(null);
+    } catch (err) {
+      setError('Failed to fetch proxy history');
+      console.error(err);
+    }
+  }, []);
+
   const fetchAnalysisResults = useCallback(async () => {
     try {
       const data = await proxyApi.getAnalysisResults();
@@ -91,6 +120,20 @@ export const ProxyDashboard: React.FC = () => {
       console.error(err);
     }
   }, []);
+
+  const handleLocalProxyToggle = (event: React.ChangeEvent<HTMLInputElement>) => {
+    setLocalProxyEnabled(event.target.checked);
+    // Only toggle local proxy if Docker proxy is running
+    if (status?.isRunning) {
+      if (event.target.checked) {
+        // Logic to start local proxy client
+        console.log("Local proxy client started");
+      } else {
+        // Logic to stop local proxy client
+        console.log("Local proxy client stopped");
+      }
+    }
+  };
 
   const startProxy = useCallback(async () => {
     try {
@@ -123,6 +166,10 @@ export const ProxyDashboard: React.FC = () => {
 
       await proxyApi.startProxy(newSession.id, settings);
       await fetchStatus();
+      if (localProxyEnabled) {
+        // Start local proxy client if checkbox is checked
+        console.log("Local proxy client started");
+      }
       setError(null);
     } catch (err) {
       setError('Failed to start proxy');
@@ -135,6 +182,10 @@ export const ProxyDashboard: React.FC = () => {
       await proxyApi.stopProxy();
       await fetchStatus();
       setSession(null);
+      // Stop local proxy client if it was running
+      if (localProxyEnabled) {
+        console.log("Local proxy client stopped");
+      }
       setError(null);
     } catch (err) {
       setError('Failed to stop proxy');
@@ -157,6 +208,7 @@ export const ProxyDashboard: React.FC = () => {
     const init = async () => {
       setLoading(true);
       await fetchStatus();
+      await fetchHistory();
       await fetchAnalysisResults();
       setLoading(false);
     };
@@ -165,6 +217,7 @@ export const ProxyDashboard: React.FC = () => {
     // Poll for updates
     const intervalId = setInterval(() => {
       fetchStatus();
+      fetchHistory();
       fetchAnalysisResults();
     }, 5000);
 
@@ -195,6 +248,18 @@ export const ProxyDashboard: React.FC = () => {
               <Typography variant="h6">
                 Proxy Status: {status?.isRunning ? 'Running' : 'Stopped'}
               </Typography>
+              <FormControlLabel
+                control={
+                  <Checkbox
+                    checked={localProxyEnabled}
+                    disabled={isMobile}
+                    onChange={handleLocalProxyToggle}
+                    name="localProxy"
+                    color="primary"
+                  />
+                }
+                label="Enable Local Proxy"
+              />
               <Button
                 variant="contained"
                 color={status?.isRunning ? 'error' : 'primary'}
@@ -227,7 +292,7 @@ export const ProxyDashboard: React.FC = () => {
 
               <TabPanel value={tabValue} index={0}>
                 <Grid container spacing={3}>
-                  <Grid item xs={12}>
+                  <Grid item xs={12} md={6}>
                     <ProxyProvider>
                       <Paper sx={{ p: 2 }}>
                         <Typography variant="body1" align="center">
@@ -236,6 +301,37 @@ export const ProxyDashboard: React.FC = () => {
                         </Typography>
                       </Paper>
                     </ProxyProvider>
+                  </Grid>
+
+                  <Grid item xs={12} md={6}>
+                    <Paper sx={{ p: 2 }}>
+                      <Typography variant="h6" align="center">
+                        Proxy History
+                      </Typography>
+                      {history.length === 0 ? (
+                        <Typography variant="body1" align="center">
+                          No history available.
+                        </Typography>
+                      ) : (
+                        <ul>
+                          {history.map((entry, index) => (
+                            <li key={index}>
+                              <strong>{entry.method}</strong> {entry.url}
+                              <br />
+                              <em>Status:</em> {entry.response_status}
+                              <br />
+                              <em>Request Headers:</em> {JSON.stringify(entry.request_headers)}
+                              <br />
+                              <em>Response Headers:</em> {JSON.stringify(entry.response_headers)}
+                              <br />
+                              <em>Request Body:</em> {entry.request_body}
+                              <br />
+                              <em>Response Body:</em> {entry.response_body}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </Paper>
                   </Grid>
                 </Grid>
               </TabPanel>

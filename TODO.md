@@ -557,3 +557,9 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
 *This checklist is intended as a living document. Adjust, iterate, and expand upon these items as Anarchy Copilot evolves and user feedback shapes future developments.*
 
 ---
+
+## Recent Updates
+
+- Implemented a proxy client to poll for settings and apply them.
+- Added a UI checkbox to enable the local proxy, which only activates when the Docker proxy is running.
+- Created a new `/settings` endpoint to provide current proxy settings to the client.

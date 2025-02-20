@@ -12,6 +12,9 @@ import {
   ListItemText,
   IconButton,
   useTheme,
+  Avatar,
+  Menu,
+  MenuItem
 } from '@mui/material';
 import {
   Menu as MenuIcon,
@@ -44,10 +47,25 @@ export default function AppLayout({ children }: AppLayoutProps) {
   const location = useLocation();
   const [drawerOpen, setDrawerOpen] = useState(true);
 
+  const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
+  const [currentUser, setCurrentUser] = useState<string>('User1');
+
+  const handleUserMenuClick = (event: React.MouseEvent<HTMLElement>) => {
+    setAnchorEl(event.currentTarget);
+  };
+
+  const handleUserMenuClose = () => {
+    setAnchorEl(null);
+  };
+
+  const handleUserSwitch = (user: string) => {
+    setCurrentUser(user);
+    handleUserMenuClose();
+  };
+
   const handleDrawerToggle = () => {
     setDrawerOpen(!drawerOpen);
   };
-
   const drawer = (
     <Box>
       <Toolbar>
@@ -105,9 +123,23 @@ export default function AppLayout({ children }: AppLayoutProps) {
             <Typography variant="h6" noWrap component="div">
               {menuItems.find(item => item.path === location.pathname)?.text || 'Dashboard'}
             </Typography>
-            {location.pathname !== '/projects' && (
-              <ProjectSelector onCreateClick={() => navigate('/projects')} />
-            )}
+            <Box display="flex" alignItems="center">
+              <Box sx={{ borderRadius: 1, p: 1, mr: 2 }}>
+                <ProjectSelector onCreateClick={() => navigate('/projects')} />
+              </Box>
+              <Avatar onClick={handleUserMenuClick} sx={{ cursor: 'pointer', ml: 2 }}>
+                {currentUser[0]}
+              </Avatar>
+              <Menu
+                anchorEl={anchorEl}
+                open={Boolean(anchorEl)}
+                onClose={handleUserMenuClose}
+              >
+                <MenuItem onClick={() => handleUserSwitch('User1')}>User1</MenuItem>
+                <MenuItem onClick={() => handleUserSwitch('User2')}>User2</MenuItem>
+                <MenuItem onClick={() => handleUserSwitch('User3')}>User3</MenuItem>
+              </Menu>
+            </Box>
           </Box>
         </Toolbar>
       </AppBar>

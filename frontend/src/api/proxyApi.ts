@@ -53,6 +53,11 @@ class ProxyApi {
         return response.data;
     }
 
+    async getHistory(): Promise<any[]> {
+        const response = await axios.get(`${this.baseUrl}/history`);
+        return response.data;
+    }
+
     async clearAnalysisResults(): Promise<void> {
         await axios.delete(`${this.baseUrl}/analysis/results`);
     }

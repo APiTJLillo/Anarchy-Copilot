@@ -2,12 +2,12 @@
 import gzip
 import zlib
 import codecs
-from typing import Optional, Set
+from typing import Optional, Set, Tuple
 from email.message import Message
 
-from .interceptor import RequestInterceptor, InterceptedRequest, InterceptedResponse
+from .interceptor import ProxyInterceptor, InterceptedRequest, InterceptedResponse
 
-class ContentEncodingInterceptor(RequestInterceptor):
+class ContentEncodingInterceptor(ProxyInterceptor):
     """Interceptor that validates and handles content encoding."""
 
     # Set of supported content encodings
@@ -19,7 +19,7 @@ class ContentEncodingInterceptor(RequestInterceptor):
         "utf-32", "utf-32le", "utf-32be"
     }
 
-    def _parse_content_type(self, content_type: str) -> "tuple[str, Optional[str]]":
+    def _parse_content_type(self, content_type: str) -> Tuple[str, Optional[str]]:
         """Parse Content-Type header to get media type and charset."""
         if not content_type:
             return "", None
@@ -31,8 +31,8 @@ class ContentEncodingInterceptor(RequestInterceptor):
         media_type = params.get("", content_type.split(";")[0].strip())
         return media_type, charset
 
-    async def intercept(self, request: InterceptedRequest) -> InterceptedRequest:
-        """Validate content encoding of request body."""
+    async def intercept_request(self, request: InterceptedRequest) -> InterceptedRequest:
+        """Validate and handle content encoding of request body."""
         # Get and validate Content-Encoding headers
         content_encoding = request.get_header("Content-Encoding", "identity").lower()
         x_content_encoding = request.get_header("X-Content-Encoding")
@@ -90,3 +90,63 @@ class ContentEncodingInterceptor(RequestInterceptor):
                 raise ValueError(f"Invalid Content-Length header: {str(e)}")
 
         return request
+
+    async def intercept_response(self, response: InterceptedResponse, request: InterceptedRequest) -> InterceptedResponse:
+        """Validate and handle content encoding of response body."""
+        # Get and validate Content-Encoding headers
+        content_encoding = response.get_header("Content-Encoding", "identity").lower()
+        x_content_encoding = response.get_header("X-Content-Encoding")
+        
+        # Check for conflicting content encodings
+        if x_content_encoding:
+            raise ValueError("Conflicting or duplicate content encodings in response")
+        
+        # Check for valid content encoding
+        if content_encoding not in self.SUPPORTED_ENCODINGS:
+            raise ValueError(f"Unsupported response content encoding: {content_encoding}")
+        
+        # Handle gzip encoded content
+        if content_encoding == "gzip" and response.body is not None:
+            # Special case: empty content
+            if len(response.body) == 0:
+                response.body = gzip.compress(b"")
+                response.set_header("Content-Length", "20")  # Empty gzip content length
+                return response
+
+            try:
+                # Attempt to decompress - if corrupted this will raise an error
+                decompressed = gzip.decompress(response.body)
+                # Recompress to ensure valid gzip content
+                recompressed = gzip.compress(decompressed)
+                response.body = recompressed
+                # Update Content-Length to match recompressed data
+                response.set_header("Content-Length", str(len(recompressed)))
+            except (gzip.BadGzipFile, zlib.error, OSError) as e:
+                # Invalid gzip content
+                raise ValueError(f"Corrupted gzip content in response: {str(e)}")
+
+        # Check for conflicting transfer encodings
+        transfer_encoding = response.get_header("Transfer-Encoding", "").lower()
+        if transfer_encoding:
+            if "gzip" in transfer_encoding or (
+                content_encoding != "identity" and content_encoding in transfer_encoding
+            ):
+                raise ValueError("Conflicting content and transfer encodings in response")
+
+        # Get and validate Content-Type charset
+        content_type = response.get_header("Content-Type", "")
+        _, charset = self._parse_content_type(content_type)
+        if charset and charset.lower() not in self.SUPPORTED_CHARSETS:
+            raise ValueError(f"Unsupported charset in response: {charset}")
+
+        # Validate Content-Length if present
+        content_length = response.get_header("Content-Length")
+        if content_length is not None:
+            try:
+                length = int(content_length)
+                if response.body is not None and len(response.body) != length:
+                    raise ValueError("Content-Length header does not match response body length")
+            except ValueError as e:
+                raise ValueError(f"Invalid Content-Length header in response: {str(e)}")
+
+        return response

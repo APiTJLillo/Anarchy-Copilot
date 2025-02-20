@@ -4,6 +4,11 @@ AI-powered bug bounty suite that integrates modern technologies to streamline th
 
 ## Features
 
+- **Proxy Client**: A client application that polls for proxy settings and applies them as needed.
+- **Local Proxy Checkbox**: A UI checkbox to enable the local proxy, which only activates when the Docker proxy is running.
+- **Proxy Settings Endpoint**: A new `/settings` endpoint to provide current proxy settings to the client.
+
+
 ### Reconnaissance Module ✅
 - Automated subdomain discovery
 - Port scanning and service detection

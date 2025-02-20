@@ -46,6 +46,8 @@ class Project(Base):
     # Relationships
     owner = relationship("User", back_populates="owned_projects")
     collaborators = relationship("User", secondary=project_collaborators, back_populates="projects")
+    recon_modules = relationship("ReconModule", back_populates="project")
+    recon_targets = relationship("ReconTarget", back_populates="project")
     recon_results = relationship("ReconResult", back_populates="project")
     vulnerabilities = relationship("Vulnerability", back_populates="project")
     reports = relationship("Report", back_populates="project")

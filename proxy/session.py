@@ -6,10 +6,12 @@ and managing the state of intercepted traffic.
 """
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, AsyncContextManager
 from collections import deque
 import uuid
 import re
+import aiohttp
+from contextlib import asynccontextmanager
 
 from .interceptor import InterceptedRequest, InterceptedResponse
 
@@ -73,6 +75,64 @@ class ProxySession:
         self._history: deque[HistoryEntry] = deque(maxlen=max_history)
         self._pending_requests: Dict[str, HistoryEntry] = {}
         self.metadata: Dict[str, str] = {}
+        self._client: Optional[aiohttp.ClientSession] = None
+
+    @property
+    def client(self) -> aiohttp.ClientSession:
+        """Get the aiohttp client session, creating it if needed."""
+        if self._client is None:
+            self._client = aiohttp.ClientSession()
+        return self._client
+
+    async def close(self) -> None:
+        """Close the session and cleanup resources."""
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
+
+    @asynccontextmanager
+    async def request(self, request: InterceptedRequest) -> AsyncContextManager[aiohttp.ClientResponse]:
+        """Perform an HTTP request and track it in history.
+        
+        Args:
+            request: The intercepted request to forward
+            
+        Returns:
+            An async context manager that yields the aiohttp response
+        """
+        # Create history entry
+        entry = self.create_history_entry(request)
+        start_time = datetime.now()
+
+        try:
+            # Forward request using aiohttp
+            async with self.client.request(
+                method=request.method,
+                url=request.url,
+                headers=request.headers,
+                data=request.body
+            ) as response:
+                # Calculate duration
+                duration = (datetime.now() - start_time).total_seconds()
+                
+                # Create intercepted response
+                intercepted_response = InterceptedResponse(
+                    status_code=response.status,
+                    headers=dict(response.headers),
+                    body=await response.read()
+                )
+                
+                # Complete history entry
+                entry.duration = duration
+                self.complete_history_entry(entry.id, intercepted_response)
+                
+                yield response
+
+        except Exception as e:
+            # Clean up pending request on error
+            if entry.id in self._pending_requests:
+                del self._pending_requests[entry.id]
+            raise
     
     def create_history_entry(self, request: InterceptedRequest) -> HistoryEntry:
         """Create and store a new history entry for a request.

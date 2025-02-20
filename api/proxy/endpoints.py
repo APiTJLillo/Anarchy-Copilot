@@ -1,21 +1,27 @@
 """Proxy API endpoint handlers."""
 import asyncio
 import logging
+import os
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, List, Any, Optional, cast
-from fastapi import HTTPException, Body, Depends, Path, WebSocket, BackgroundTasks
+from fastapi import HTTPException, Body, Depends, WebSocket, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy.orm import selectinload
 from starlette.responses import JSONResponse
 
-from proxy.core import ProxyServer
+from typing import cast
+import proxy.core
 from proxy.config import ProxyConfig
 from database import get_async_session
 from models.base import Project
-from . import router
+from . import router, get_proxy_server
 from .database_models import ProxySession
 from .models import (CreateProxySession, ProxySessionResponse)
+
+# Initialize ProxyServer lazily to avoid circular imports
+from proxy.core import ProxyServer
 
 __all__ = [
     "get_proxy_status",
@@ -38,8 +44,8 @@ __all__ = [
 
 logger = logging.getLogger(__name__)
 
-# Initialize state
-proxy_server: Optional[ProxyServer] = None
+# Use get_proxy_server to access the global instance
+proxy_server = get_proxy_server()
 
 # Import models after state initialization to avoid circular imports
 from .models import (
@@ -223,6 +229,52 @@ async def get_proxy_status(
     logger.debug(f"Proxy status: {status}")
     return status
 
+@router.get("/history", response_model=List[HistoryEntryResponse])
+async def get_proxy_history(
+    db: AsyncSession = Depends(get_async_session)
+) -> List[HistoryEntryResponse]:
+    """Get proxy request/response history."""
+    logger.debug("Proxy history endpoint called")
+    
+    result = await db.execute(
+        select(ProxySession)
+        .options(selectinload(ProxySession.history_entries))
+        .order_by(ProxySession.start_time.desc())
+    )
+    sessions = result.scalars().all()
+    
+    history_entries = []
+    for session in sessions:
+        for entry in session.history_entries:
+            history_entries.append(HistoryEntryResponse.from_entry(entry))
+    
+    return history_entries
+
+@router.get("/settings", response_model=Dict[str, Any])
+async def get_proxy_settings(
+    db: AsyncSession = Depends(get_async_session)
+) -> Dict[str, Any]:
+    """Get current proxy settings."""
+    logger.debug("Proxy settings endpoint called")
+    
+    server = get_proxy_state()
+    if not server or not server.is_running:
+        raise HTTPException(status_code=400, detail="Proxy server is not running")
+    
+    settings = {
+        "host": server.config.host,
+        "port": server.config.port,
+        "interceptRequests": server.config.intercept_requests,
+        "interceptResponses": server.config.intercept_responses,
+        "allowedHosts": list(server.config.allowed_hosts),
+        "excludedHosts": list(server.config.excluded_hosts),
+        "maxConnections": server.config.max_connections,
+        "maxKeepaliveConnections": server.config.max_keepalive_connections,
+        "keepaliveTimeout": server.config.keepalive_timeout
+    }
+    
+    return settings
+
 @router.get("/analysis/results", response_model=List[Dict[str, Any]])
 async def get_analysis_results():
     """Get proxy analysis results."""
@@ -319,29 +371,53 @@ async def start_proxy(
         await asyncio.sleep(2)
     
     try:
+        logger.debug(f"Starting proxy with settings: {settings}")
+        ca_cert_path = os.getenv("CA_CERT_PATH")
+        ca_key_path = os.getenv("CA_KEY_PATH")
+        
+        if not ca_cert_path or not ca_key_path:
+            raise ValueError("CA_CERT_PATH and CA_KEY_PATH must be set in the environment variables.")
+        
         config = ProxyConfig(
             host=settings.host,
             port=settings.port,
             intercept_requests=settings.interceptRequests,
             intercept_responses=settings.interceptResponses,
-            allowed_hosts=set(settings.allowedHosts),
             excluded_hosts=set(settings.excludedHosts),
             max_connections=settings.maxConnections,
             max_keepalive_connections=settings.maxKeepaliveConnections,
-            keepalive_timeout=settings.keepaliveTimeout
+            keepalive_timeout=settings.keepaliveTimeout,
+            ca_cert_path=Path(os.getenv("CA_CERT_PATH")),
+            ca_key_path=Path(os.getenv("CA_KEY_PATH"))
         )
 
         # Store settings in session
         session.settings = settings.dict()
         await db.commit()
         
+        # Create and start the proxy server
         proxy_server = ProxyServer(config, add_default_interceptors=False)
-        await proxy_server.start()
+        logger.debug("Proxy server instance created")
+        
+        # Start the proxy server with retries
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                logger.info(f"Starting proxy server on {config.host}:{config.port} (attempt {attempt + 1})")
+                await proxy_server.start()
+                logger.info(f"Proxy server started successfully on {config.host}:{config.port}")
+                break
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    logger.error(f"Failed to start proxy server after {max_retries} attempts: {e}")
+                    raise
+                logger.warning(f"Failed to start proxy server (attempt {attempt + 1}): {e}")
+                await asyncio.sleep(2)
         logger.info(f"Proxy server started successfully for session {session_id}")
         return {"message": "Proxy server started successfully", "session_id": session_id}
         
     except Exception as e:
-        logger.error(f"Failed to start proxy: {e}")
+        logger.error(f"Failed to start proxy: {e}", exc_info=True)
         proxy_server = None
         raise HTTPException(status_code=500, detail=str(e))
 

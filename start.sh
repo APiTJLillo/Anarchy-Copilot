@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Activate the virtual environment
+source venv/bin/activate
+
 # Function to check if Docker is running
 check_docker() {
     if ! docker info > /dev/null 2>&1; then
@@ -32,6 +35,28 @@ setup_certs_directory() {
     fi
 }
 
+# Function to wait for service readiness
+wait_for_service() {
+    local host=$1
+    local port=$2
+    local service=$3
+    local max_attempts=30
+    local attempt=1
+
+    echo "⏳ Waiting for $service to be ready..."
+    while ! nc -z $host $port >/dev/null 2>&1; do
+        if [ $attempt -eq $max_attempts ]; then
+            echo "❌ $service failed to start after $max_attempts attempts"
+            return 1
+        fi
+        sleep 2
+        let attempt++
+        echo -n "."
+    done
+    echo "✅ $service is ready"
+    return 0
+}
+
 # Main script
 echo "🚀 Starting Anarchy Copilot..."
 
@@ -45,19 +70,23 @@ setup_certs_directory
 echo "🔨 Building and starting containers..."
 docker-compose up --build -d
 
-# Wait for services to be ready
-echo "⏳ Waiting for services to be ready..."
-sleep 10  # Give services some time to start
+# Wait for core services to be ready
+wait_for_service localhost 8000 "Backend API" || exit 1
 
-# Check if services are running
+# Verify all services are running
 if ! docker-compose ps | grep -q "Up"; then
-    echo "❌ Error: Services failed to start"
+    echo "❌ Error: Some services failed to start"
     echo "Logs from containers:"
     docker-compose logs
     exit 1
 fi
 
-echo "✅ Services are up and running!"
+echo "✅ All services are up and running!"
+
+# Start the proxy client after services are ready
+echo "🔄 Starting proxy client..."
+python3 scripts/proxy_client.py &
+
 echo
 echo "🌐 You can access the application at:"
 echo "   Frontend: http://localhost:3000"

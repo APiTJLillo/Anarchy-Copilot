@@ -93,11 +93,10 @@ class ProxyConfig:
     
     def is_in_scope(self, host: str) -> bool:
         """Check if a host is within the configured scope."""
+        # Only check excluded hosts, allow everything else
         if host in self.excluded_hosts:
             return False
-        if not self.allowed_hosts:  # Empty set means all hosts allowed
-            return True
-        return host in self.allowed_hosts
+        return True
     
     def to_dict(self) -> dict:
         """Convert configuration to a dictionary format."""

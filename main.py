@@ -202,6 +202,6 @@ if __name__ == "__main__":
         app,
         host="0.0.0.0",
         port=8000,
-        ssl_keyfile=None,  # Disable HTTPS to prevent HSTS redirects
-        ssl_certfile=None
+        ssl_keyfile="app/certs/ca.key",
+        ssl_certfile="app/certs/ca.crt"
     )

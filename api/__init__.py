@@ -12,9 +12,6 @@ from fastapi.responses import JSONResponse, Response
 
 logger = logging.getLogger(__name__)
 
-from .health import router as health_router
-from .proxy import router as proxy_router
-
 # Global config storage
 _app_config: Dict[str, Any] = {}
 
@@ -107,11 +104,10 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> FastAPI:
                 content={"detail": f"Middleware error: {str(e)}"}
             )
 
-    # Register routers
-    app.include_router(health_router, prefix="/api/health")
+    # Import and include the proxy router
+    from .proxy.endpoints import router as proxy_router
     app.include_router(proxy_router, prefix="/api/proxy")
 
-    # Register event handlers using decorators
     @app.on_event("startup")
     async def startup_event():
         """Initialize resources on startup."""
@@ -122,9 +118,13 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> FastAPI:
     async def shutdown_event():
         """Clean up resources on shutdown."""
         # Clean up any resources
-        from .proxy import proxy_server
-        if proxy_server:
-            await proxy_server.stop()
+        # Import proxy_server lazily to avoid circular imports
+        try:
+            from .proxy import proxy_server
+            if proxy_server:
+                await proxy_server.stop()
+        except ImportError:
+            pass
 
     return app
 

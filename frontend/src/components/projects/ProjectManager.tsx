@@ -38,12 +38,6 @@ export const ProjectManager: React.FC = () => {
     return (
         <Container maxWidth="xl">
             <Box py={3}>
-                {/* Header with project selector */}
-                <Box mb={3} display="flex" justifyContent="space-between" alignItems="center">
-                    <Typography variant="h4">Project Management</Typography>
-                    <ProjectSelector onCreateClick={handleCreateClick} />
-                </Box>
-
                 <Paper>
                     <Tabs
                         value={selectedTab}

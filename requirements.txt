@@ -4,6 +4,7 @@ uvicorn>=0.34.0
 python-multipart>=0.0.5
 starlette>=0.27.0
 pydantic>=2.0.0
+pydantic-settings>=2.0.0
 
 # Database
 SQLAlchemy>=2.0.0
@@ -19,6 +20,9 @@ pytest>=7.0.0
 httpx>=0.24.0
 pytest-asyncio>=0.21.0
 pytest-html>=3.1.1
+pytest-benchmark>=4.0.0  # Added for benchmark tests
+pytest-timeout>=2.1.0    # Added for timing sensitive tests
+pytest-cov>=4.1.0       # Added for coverage reports
 
 # Development Tools
 black>=23.0.0
@@ -34,6 +38,13 @@ sqlalchemy-stubs>=0.4
 # Proxy Tools
 mitmproxy>=9.0.0
 aiohttp>=3.8.0
+async-timeout>=4.0.0
+h11>=0.14.0            # Added for HTTP/1.1 support
+websockets>=10.3       # Added for WebSocket support
+rich>=13.3.0           # Added for CLI tools
+click>=8.1.0           # Added for CLI tools
+tabulate>=0.9.0        # Added for benchmark reporting
+matplotlib>=3.7.0      # Added for performance graphs
 
 # Recon Tools
 pyppeteer>=1.0.2
@@ -44,3 +55,7 @@ beautifulsoup4>=4.12.0
 aiodns>=3.0.0
 python-nmap>=0.7.1
 aiofiles>=23.0.0
+
+# Performance Monitoring
+line-profiler>=4.0.0   # Added for performance profiling
+memory-profiler>=0.61.0 # Added for memory analysis

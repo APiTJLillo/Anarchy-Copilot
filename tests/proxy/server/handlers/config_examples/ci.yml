@@ -1,0 +1,21 @@
+# CI Environment Performance Configuration
+concurrent_connections: 50
+request_count: 500
+warmup_requests: 50
+
+# Reduced thresholds for CI
+min_throughput: 500.0
+max_latency_p95: 0.05
+max_memory_mb: 200.0
+
+# Smaller data sizes for faster tests
+data_sizes: [512, 4096, 16384]
+data_distributions:
+  small: 0.8
+  medium: 0.15
+  large: 0.05
+
+# CI-specific settings
+save_raw_data: false
+disable_gc: false
+report_format: "json"

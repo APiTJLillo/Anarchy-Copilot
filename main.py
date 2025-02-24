@@ -1,3 +1,4 @@
+"""Main application module."""
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
@@ -13,7 +14,9 @@ from database import get_db
 from api.proxy import router as proxy_router
 from api.websocket import router as websocket_router
 from api.projects import router as projects_router
+from api.users import router as users_router
 from api import create_app
+from version import __version__
 
 import uvicorn
 
@@ -26,14 +29,24 @@ logger = logging.getLogger(__name__)
 
 def create_and_configure_app():
     """Create and configure FastAPI application with enhanced logging."""
-    logger.info("Starting application creation")
+    logger.info(f"Starting application creation (v{__version__})")
     
-    # Create fresh app instance
-    # Create base app with minimal config
-    app = create_app({
-        "debug": True, 
-        "cors_origins": ["http://localhost:3000"]
-    })
+    from api.config import Settings
+    
+    # Load settings from environment
+    settings = Settings()
+    logger.info(f"Loaded settings: {settings.dict()}")
+    
+    # Create fresh app instance with settings
+    config = {
+        "debug": settings.debug,
+        "api_title": settings.api_title,
+        "api_version": settings.api_version,
+        "version": __version__
+    }
+
+    # Don't pass cors_origins directly - it will be handled by Settings class
+    app = create_app(config)
 
     logger.info("Base app created")
 
@@ -42,12 +55,16 @@ def create_and_configure_app():
     app.include_router(projects_router)  # Projects router already has /api/projects prefix
     app.include_router(proxy_router, prefix="/api/proxy")
     app.include_router(websocket_router, prefix="/api/proxy/websocket")
+    app.include_router(users_router, prefix="/api/users")  # Mounts at /api/users
 
     # Add diagnostic routes
     @app.get("/api/health")
     async def health_check():
         """Basic health check endpoint."""
-        return {"status": "healthy"}
+        return {
+            "status": "healthy",
+            "version": __version__
+        }
     
     @app.get("/api/debug/routes")
     async def list_routes():
@@ -67,7 +84,7 @@ app = create_and_configure_app()
 @app.on_event("startup")
 async def startup_event():
     """Log when application starts."""
-    logger.info("FastAPI application starting up")
+    logger.info(f"FastAPI application starting up (v{__version__})")
     # Test the proxy status endpoint
     from api.proxy.endpoints import get_proxy_status
     try:
@@ -197,11 +214,43 @@ async def get_recon_history(
 
 if __name__ == "__main__":
     import uvicorn
+    from api.config import Settings
+    
+    # Load and validate settings
+    try:
+        settings = Settings()
+        logger.info(f"Successfully loaded configuration (v{__version__})")
+    except Exception as e:
+        logger.error(f"Failed to load configuration: {e}")
+        raise
+
     # Ensure we bind to all interfaces when running in Docker
     uvicorn.run(
         app,
-        host="0.0.0.0",
-        port=8000,
+        host=settings.proxy_host,
+        port=settings.proxy_port,
         ssl_keyfile="app/certs/ca.key",
-        ssl_certfile="app/certs/ca.crt"
+        ssl_certfile="app/certs/ca.crt",
+        log_config={
+            "version": 1,
+            "disable_existing_loggers": False,
+            "formatters": {
+                "default": {
+                    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+                }
+            },
+            "handlers": {
+                "default": {
+                    "formatter": "default",
+                    "class": "logging.StreamHandler",
+                    "stream": "ext://sys.stderr"
+                }
+            },
+            "loggers": {
+                "": {"handlers": ["default"], "level": "INFO"},
+                "api": {"level": "DEBUG"},
+                "proxy": {"level": "DEBUG"},
+                "uvicorn": {"level": "INFO"}
+            }
+        }
     )

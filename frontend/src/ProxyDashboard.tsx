@@ -1,5 +1,4 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Avatar, Menu, MenuItem } from '@mui/material';
 import {
   Box,
   Grid,
@@ -10,6 +9,7 @@ import {
   Alert,
   Tabs,
   Tab,
+  Divider,
   FormControlLabel,
   Checkbox,
   Table,
@@ -17,14 +17,25 @@ import {
   TableCell,
   TableContainer,
   TableHead,
-  TableRow
+  TableRow,
+  FormControl,
+  InputLabel,
+  Select,
+  MenuItem,
 } from '@mui/material';
 import { InterceptorView } from './components/proxy/InterceptorView';
+import ConnectionMonitor from './components/proxy/ConnectionMonitor';
 import { WebSocketView } from './components/proxy/WebSocketView';
 import { RequestModal } from './components/proxy/RequestModal';
 import { ProxyProvider } from './components/proxy/ProxyContext';
+import { UserProvider, useUser } from './contexts/UserContext';
 import AnalysisResults from './components/proxy/AnalysisResults';
-import { proxyApi, ProxySession, ProxySettings } from './api/proxyApi';
+import InterceptionRuleManager from './components/proxy/InterceptionRuleManager';
+import { Version } from './components/proxy/Version';
+import proxyApi from './api/proxyApi';
+import type { ProxySession, ProxySettings } from './api/proxyApi';
+import type { AnalysisResult } from './api/proxyApi';
+import ErrorBoundary from './components/proxy/ErrorBoundary';
 
 interface ProxyStatus {
   isRunning: boolean;
@@ -35,24 +46,15 @@ interface ProxyStatus {
   history: any[];
 }
 
-interface AnalysisResult {
-  requestId: string;
-  ruleName: string;
-  severity: string;
-  description: string;
-  evidence: string;
-  timestamp: string;
-}
-
 interface TabPanelProps {
   children?: React.ReactNode;
   index: number;
   value: number;
 }
 
+// Base TabPanel component
 const TabPanel: React.FC<TabPanelProps> = (props) => {
   const { children, value, index, ...other } = props;
-
   return (
     <div
       role="tabpanel"
@@ -68,7 +70,37 @@ const TabPanel: React.FC<TabPanelProps> = (props) => {
   );
 };
 
-export const ProxyDashboard: React.FC = () => {
+// Custom tab panel component
+interface CustomTabPanelProps {
+  children: React.ReactNode;
+  value: number;
+  index: number;
+}
+
+const CustomTabPanel: React.FC<CustomTabPanelProps> = ({ children, value, index }) => (
+  <Box
+    role="tabpanel"
+    hidden={value !== index}
+    id={`proxy-tabpanel-${index}`}
+    aria-labelledby={`proxy-tab-${index}`}
+    sx={{ py: 2 }}
+  >
+    {value === index && children}
+  </Box>
+);
+
+const ProxyDashboardContent: React.FC = () => {
+  const {
+    currentUser,
+    setCurrentUser,
+    users,
+    projects,
+    loadingUsers,
+    loadingProjects,
+    error: userError
+  } = useUser();
+
+  const [selectedProject, setSelectedProject] = useState<number | ''>('');
   const [selectedRequest, setSelectedRequest] = useState<any>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [currentRequestIndex, setCurrentRequestIndex] = useState<number>(0);
@@ -81,18 +113,6 @@ export const ProxyDashboard: React.FC = () => {
   const [tabValue, setTabValue] = useState(0);
   const [localProxyEnabled, setLocalProxyEnabled] = useState(false);
   const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-
-  const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
-  const [currentUser, setCurrentUser] = useState<string>('User1');
-
-  const handleUserMenuClose = () => {
-    setAnchorEl(null);
-  };
-
-  const handleUserSwitch = (user: string) => {
-    setCurrentUser(user);
-    handleUserMenuClose();
-  };
 
   const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
     setTabValue(newValue);
@@ -140,13 +160,10 @@ export const ProxyDashboard: React.FC = () => {
 
   const handleLocalProxyToggle = (event: React.ChangeEvent<HTMLInputElement>) => {
     setLocalProxyEnabled(event.target.checked);
-    // Only toggle local proxy if Docker proxy is running
     if (status?.isRunning) {
       if (event.target.checked) {
-        // Logic to start local proxy client
         console.log("Local proxy client started");
       } else {
-        // Logic to stop local proxy client
         console.log("Local proxy client stopped");
       }
     }
@@ -154,8 +171,13 @@ export const ProxyDashboard: React.FC = () => {
 
   const startProxy = useCallback(async () => {
     try {
+      if (!currentUser || !selectedProject) {
+        setError('Please select a user and project');
+        return;
+      }
+
       // Create a new session
-      const newSession = await proxyApi.createSession("New Session", 1, 1, {
+      const newSession = await proxyApi.createSession("New Session", selectedProject, currentUser.id, {
         host: "127.0.0.1",
         port: 8080,
         interceptRequests: true,
@@ -184,7 +206,6 @@ export const ProxyDashboard: React.FC = () => {
       await proxyApi.startProxy(newSession.id, settings);
       await fetchStatus();
       if (localProxyEnabled) {
-        // Start local proxy client if checkbox is checked
         console.log("Local proxy client started");
       }
       setError(null);
@@ -192,14 +213,13 @@ export const ProxyDashboard: React.FC = () => {
       setError('Failed to start proxy');
       console.error(err);
     }
-  }, [fetchStatus]);
+  }, [fetchStatus, currentUser, selectedProject, localProxyEnabled]);
 
   const stopProxy = useCallback(async () => {
     try {
       await proxyApi.stopProxy();
       await fetchStatus();
       setSession(null);
-      // Stop local proxy client if it was running
       if (localProxyEnabled) {
         console.log("Local proxy client stopped");
       }
@@ -208,7 +228,7 @@ export const ProxyDashboard: React.FC = () => {
       setError('Failed to stop proxy');
       console.error(err);
     }
-  }, [fetchStatus]);
+  }, [fetchStatus, localProxyEnabled]);
 
   const clearAnalysisResults = useCallback(async () => {
     try {
@@ -227,8 +247,6 @@ export const ProxyDashboard: React.FC = () => {
 
     const pollData = async () => {
       if (!mounted) return;
-      console.log('Polling for updates...');
-
       try {
         await Promise.all([
           fetchStatus(),
@@ -240,16 +258,13 @@ export const ProxyDashboard: React.FC = () => {
       }
 
       if (mounted) {
-        // Schedule next poll only if still mounted
         pollId = setTimeout(pollData, 5000);
       }
     };
 
-    // Initial load
     const init = async () => {
       if (!mounted) return;
       setLoading(true);
-
       try {
         await Promise.all([
           fetchStatus(),
@@ -259,10 +274,8 @@ export const ProxyDashboard: React.FC = () => {
       } catch (error) {
         console.error('Error during initial load:', error);
       }
-
       if (mounted) {
         setLoading(false);
-        // Start polling after initial load
         pollId = setTimeout(pollData, 5000);
       }
     };
@@ -274,11 +287,10 @@ export const ProxyDashboard: React.FC = () => {
       if (pollId) {
         clearTimeout(pollId);
       }
-      console.log('Cleanup: polling stopped');
     };
   }, [fetchStatus, fetchHistory, fetchAnalysisResults]);
 
-  if (loading) {
+  if (loading || loadingUsers || loadingProjects) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
         <CircularProgress />
@@ -288,9 +300,9 @@ export const ProxyDashboard: React.FC = () => {
 
   return (
     <Box sx={{ p: 3 }}>
-      {error && (
+      {(error || userError) && (
         <Alert severity="error" sx={{ mb: 2 }}>
-          {error}
+          {error || userError}
         </Alert>
       )}
 
@@ -298,36 +310,78 @@ export const ProxyDashboard: React.FC = () => {
         {/* Status and Controls */}
         <Grid item xs={12}>
           <Paper sx={{ p: 2 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-              <Typography variant="h6">
-                Proxy Status: {status?.isRunning ? 'Running' : 'Stopped'}
-              </Typography>
-              <FormControlLabel
-                control={
-                  <Checkbox
-                    checked={localProxyEnabled}
-                    disabled={isMobile}
-                    onChange={handleLocalProxyToggle}
-                    name="localProxy"
-                    color="primary"
-                  />
-                }
-                label="Enable Local Proxy"
-              />
-              <Button
-                variant="contained"
-                color={status?.isRunning ? 'error' : 'primary'}
-                onClick={status?.isRunning ? stopProxy : startProxy}
-              >
-                {status?.isRunning ? 'Stop Proxy' : 'Start Proxy'}
-              </Button>
-              <Button
-                variant="outlined"
-                onClick={clearAnalysisResults}
-                disabled={!status?.isRunning}
-              >
-                Clear Analysis Results
-              </Button>
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                {/* User Selection */}
+                <FormControl sx={{ minWidth: 200 }}>
+                  <InputLabel>User</InputLabel>
+                  <Select
+                    value={currentUser?.id || ''}
+                    label="User"
+                    onChange={(e) => {
+                      const userId = e.target.value;
+                      const user = users.find(u => u.id === userId);
+                      if (user) setCurrentUser(user);
+                    }}
+                  >
+                    {users.map(user => (
+                      <MenuItem key={user.id} value={user.id}>
+                        {user.username}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+
+                {/* Project Selection */}
+                <FormControl sx={{ minWidth: 200 }}>
+                  <InputLabel>Project</InputLabel>
+                  <Select
+                    value={selectedProject}
+                    label="Project"
+                    onChange={(e) => setSelectedProject(Number(e.target.value))}
+                  >
+                    {projects.map(project => (
+                      <MenuItem key={project.id} value={project.id}>
+                        {project.name}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                  <Typography variant="h6">
+                    Proxy Status: {status?.isRunning ? 'Running' : 'Stopped'}
+                  </Typography>
+                </Box>
+                <FormControlLabel
+                  control={
+                    <Checkbox
+                      checked={localProxyEnabled}
+                      disabled={isMobile}
+                      onChange={handleLocalProxyToggle}
+                      name="localProxy"
+                      color="primary"
+                    />
+                  }
+                  label="Enable Local Proxy"
+                />
+                <Button
+                  variant="contained"
+                  color={status?.isRunning ? 'error' : 'primary'}
+                  onClick={status?.isRunning ? stopProxy : startProxy}
+                  disabled={!currentUser || !selectedProject}
+                >
+                  {status?.isRunning ? 'Stop Proxy' : 'Start Proxy'}
+                </Button>
+                <Button
+                  variant="outlined"
+                  onClick={clearAnalysisResults}
+                  disabled={!status?.isRunning}
+                >
+                  Clear Analysis Results
+                </Button>
+              </Box>
+              <Version />
             </Box>
           </Paper>
         </Grid>
@@ -340,10 +394,23 @@ export const ProxyDashboard: React.FC = () => {
                 <Tab label="HTTP/HTTPS" />
                 <Tab label="WebSocket" />
                 <Tab label="Analysis" />
+                <Tab label="Rules" />
               </Tabs>
             </Box>
 
-            <TabPanel value={tabValue} index={0}>
+            <CustomTabPanel value={tabValue} index={0}>
+              {/* Connections Monitor */}
+              <Grid container spacing={3}>
+                <Grid item xs={12}>
+                  <Box sx={{ mb: 3, minHeight: '200px' }}>
+                    <ConnectionMonitor />
+                  </Box>
+                </Grid>
+              </Grid>
+
+              <Divider sx={{ my: 3 }} />
+
+              {/* Existing Proxy History and InterceptorView */}
               <Grid container spacing={3}>
                 <Grid item xs={12} md={6}>
                   <ProxyProvider>
@@ -414,26 +481,55 @@ export const ProxyDashboard: React.FC = () => {
                   </Paper>
                 </Grid>
               </Grid>
-            </TabPanel>
+            </CustomTabPanel>
 
-            <TabPanel value={tabValue} index={1}>
+            <CustomTabPanel value={tabValue} index={1}>
               <Grid container spacing={3}>
                 <Grid item xs={12}>
                   <WebSocketView />
                 </Grid>
               </Grid>
-            </TabPanel>
+            </CustomTabPanel>
 
-            <TabPanel value={tabValue} index={2}>
+            <CustomTabPanel value={tabValue} index={2}>
               <Grid container spacing={3}>
                 <Grid item xs={12}>
-                  <AnalysisResults results={analysisResults} />
+                  <ErrorBoundary component="Analysis Results">
+                    <AnalysisResults results={analysisResults} />
+                  </ErrorBoundary>
                 </Grid>
               </Grid>
-            </TabPanel>
+            </CustomTabPanel>
+
+            <CustomTabPanel value={tabValue} index={3}>
+              <Grid container spacing={3}>
+                <Grid item xs={12}>
+                  {session && (
+                    <ErrorBoundary component="Rule Manager">
+                      <InterceptionRuleManager sessionId={session.id} />
+                    </ErrorBoundary>
+                  )}
+                  {!session && (
+                    <Paper sx={{ p: 2 }}>
+                      <Typography variant="body1" align="center">
+                        Start a proxy session to manage interception rules.
+                      </Typography>
+                    </Paper>
+                  )}
+                </Grid>
+              </Grid>
+            </CustomTabPanel>
           </Paper>
         </Grid>
       </Grid>
     </Box>
+  );
+};
+
+export const ProxyDashboard: React.FC = () => {
+  return (
+    <UserProvider>
+      <ProxyDashboardContent />
+    </UserProvider>
   );
 };

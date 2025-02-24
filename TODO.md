@@ -178,12 +178,13 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
      - ✓ Basic plugin system for request/response processors
      - ✓ Traffic capture and storage
      - ✓ Certificate management for HTTPS
-   - Frontend components:
+     - Frontend components:
      - ✓ Modal-based interception dialog
      - ✓ Request/response editors with syntax highlighting
-     - ✓ Basic traffic history view
+     - ✓ Basic traffic history view in table format
      - ✓ Real-time traffic status updates
-   - Core features:
+     - ✓ Detailed request/response modal with navigation
+     - Core features:
      - ✓ HTTP/HTTPS interception
      - ✓ Request/response modification
      - ✓ Header manipulation
@@ -193,7 +194,13 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
        - ✓ Empty content support
        - ✓ Charset validation
        - ✓ Content-Length verification
+     - ✓ View proxy history while proxy is stopped
+     - ✓ Navigate between requests in history
+     - ✓ Detailed request/response inspection
      - In Progress:
+       - Add ability to edit a request and resend it
+       - Add a fuzzer with the ability to load lists into the fuzzer and store them in the database as separate lists for separate circumstances
+       - Auto-detect url parameters and other things that could be used in the fuzzer.
        - Add packet capture and manipulation to proxy capabilities
        - Add lag simulation to proxy
        - Add AI packet analysis

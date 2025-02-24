@@ -21,6 +21,9 @@ AI-powered bug bounty suite that integrates modern technologies to streamline th
 ### Vulnerability Discovery Module 🔄
 - **Advanced Proxy Platform**:
   - Custom web attack proxy with request/response interception
+  - Detailed request/response inspection with modal view
+  - Navigation between captured requests with prev/next controls
+  - History view available even when proxy is stopped
   - Real-time traffic analysis and pattern matching
   - Session management and replay capabilities
   - HTTP/HTTPS/HTTP2 and WebSocket support
@@ -51,6 +54,17 @@ pip install -e ".[dev]"
 pip install .
 ```
 
+## Docker Development
+
+After making changes to Python dependencies (requirements.txt or setup.py):
+```bash
+# Rebuild containers with new dependencies
+docker compose build dev proxy
+
+# Restart services
+docker compose up -d
+```
+
 ## Development Setup
 
 1. Clone the repository:
@@ -71,15 +85,47 @@ venv\Scripts\activate     # Windows
 pip install -e ".[dev]"
 ```
 
-4. Run environment validation:
+4. Configure environment variables:
+```bash
+# Copy example environment file
+cp .env.example .env
+
+# Edit .env file with your settings
+nano .env  # or use your preferred editor
+```
+
+5. Run environment validation:
 ```bash
 python -m tests.tools.validate_environment
 ```
 
-5. Run tests:
+6. Run tests:
 ```bash
 make test
 ```
+
+## Environment Configuration
+
+The application uses environment variables for configuration. Default values are provided in `.env.example`. Key configuration areas include:
+
+### API Settings
+- `ANARCHY_API_TITLE` - API name in OpenAPI docs
+- `ANARCHY_API_VERSION` - API version
+- `ANARCHY_DEBUG` - Enable debug mode
+- `ANARCHY_CORS_ORIGINS` - Allowed CORS origins
+
+### Proxy Settings
+- `ANARCHY_PROXY_HOST` - Proxy server host
+- `ANARCHY_PROXY_PORT` - Proxy server port
+- `ANARCHY_PROXY_INTERCEPT_REQUESTS` - Enable request interception
+- `ANARCHY_PROXY_INTERCEPT_RESPONSES` - Enable response interception
+- `ANARCHY_PROXY_MAX_CONNECTIONS` - Maximum concurrent connections
+
+### Certificate Settings
+- `CA_CERT_PATH` - Path to CA certificate
+- `CA_KEY_PATH` - Path to CA private key
+
+For detailed configuration options, see `.env.example`.
 
 ## Key Components
 

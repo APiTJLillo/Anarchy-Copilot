@@ -1,0 +1,22 @@
+# Development Environment Performance Configuration
+concurrent_connections: 100
+request_count: 1000
+warmup_requests: 100
+
+# Relaxed thresholds for development
+min_throughput: 800.0
+max_latency_p95: 0.02
+max_memory_mb: 500.0
+
+# Full range of data sizes
+data_sizes: [1024, 32768, 131072, 1048576]
+data_distributions:
+  small: 0.6
+  medium: 0.3
+  large: 0.1
+
+# Development-specific settings
+save_raw_data: true
+disable_gc: false
+thread_count: null  # Auto-detect
+plot_style: "seaborn-darkgrid"

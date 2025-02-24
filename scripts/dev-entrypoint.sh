@@ -46,6 +46,12 @@ run_migrations() {
     fi
 }
 
+# Create test data
+create_test_data() {
+    log "Creating test user and project..."
+    python scripts/create_test_user.py
+}
+
 # Setup development environment
 setup_dev_env() {
     log "Setting up development environment..."
@@ -63,10 +69,19 @@ setup_dev_env() {
         log "Skipping git hooks setup (git not available or not in a repo)"
     fi
     
-    # Install dependencies
-    log "Installing package in development mode..."
-    pip install -e ".[dev]"
-    pip install -r tests/requirements-test.txt
+    # Install dependencies - first install the package to get pyproject.toml configuration
+    log "Installing package and dependencies..."
+    pip install --no-cache-dir -e .
+    log "Installing development dependencies..."
+    pip install --no-cache-dir -e ".[dev]"
+    log "Installing test dependencies..."
+    pip install --no-cache-dir -r tests/requirements-test.txt
+    
+    # Verify all dependencies are installed correctly
+    log "Verifying dependencies..."
+    if ! pip check; then
+        log "WARNING: Dependency conflicts detected"
+    fi
     
     # Create package symlinks
     log "Setting up package symlinks..."
@@ -93,6 +108,9 @@ setup_dev_env() {
 
     # Run database migrations
     run_migrations
+
+    # Create test data
+    create_test_data
 }
 
 # Setup debugger

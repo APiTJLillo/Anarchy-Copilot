@@ -1,42 +1,66 @@
-"""Create a test user in the database."""
-import sys
-import os
-sys.path.append(os.getcwd())
+"""Script to create a test user and project for development."""
+import asyncio
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.future import select
+from database import AsyncSessionLocal
+from models.base import User, Project
+from sqlalchemy.orm import selectinload
+import logging
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import Session
-from models.base import User, Base
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-def create_test_user():
-    """Create a test user for development."""
-    # Create database engine
-    engine = create_engine('sqlite:///anarchy_copilot.db')
-    
-    # Create all tables
-    Base.metadata.create_all(engine)
-    
-    # Create session
-    session = Session(engine)
-    
-    # Check if test user already exists
-    existing_user = session.query(User).filter(User.email == "test@example.com").first()
-    if existing_user:
-        print("Test user already exists!")
-        return existing_user.id
-    
-    # Create test user
-    user = User(
-        username="testuser",
-        email="test@example.com",
-        hashed_password="dummy_hashed_password",  # In production, this would be properly hashed
-        is_active=True
-    )
-    
-    session.add(user)
-    session.commit()
-    
-    print(f"Created test user with ID: {user.id}")
-    return user.id
+async def create_test_data():
+    """Create test user and project if they don't exist."""
+    async with AsyncSessionLocal() as db:
+        # Check if test user exists
+        result = await db.execute(
+            select(User).where(User.username == "testuser")
+        )
+        user = result.scalar_one_or_none()
+
+        if not user:
+            logger.info("Creating test user...")
+            user = User(
+                username="testuser",
+                email="test@example.com",
+                is_active=True
+            )
+            db.add(user)
+            await db.commit()
+            await db.refresh(user)
+            logger.info(f"Created test user with ID: {user.id}")
+        else:
+            logger.info(f"Test user already exists with ID: {user.id}")
+
+        # Check if test project exists
+        result = await db.execute(
+            select(Project)
+            .options(selectinload(Project.collaborators))
+            .where(Project.name == "Test Project")
+        )
+        project = result.scalar_one_or_none()
+
+        if not project:
+            logger.info("Creating test project...")
+            project = Project(
+                name="Test Project",
+                description="Project for testing",
+                owner_id=user.id,
+                scope={"domains": ["example.com"]},
+                is_archived=False
+            )
+            db.add(project)
+            await db.commit()
+            await db.refresh(project)
+            logger.info(f"Created test project with ID: {project.id}")
+
+            # Add user as collaborator
+            project.collaborators.append(user)
+            await db.commit()
+            logger.info("Added test user as collaborator")
+        else:
+            logger.info(f"Test project already exists with ID: {project.id}")
 
 if __name__ == "__main__":
-    create_test_user()
+    asyncio.run(create_test_data())

@@ -28,6 +28,25 @@ class ProxySession(Base):
     creator = relationship("models.base.User", backref="proxy_sessions", foreign_keys=[created_by])
     history_entries = relationship("ProxyHistoryEntry", back_populates="session")
     analysis_results = relationship("ProxyAnalysisResult", back_populates="session")
+    interception_rules = relationship("InterceptionRule", back_populates="session", cascade="all, delete-orphan")
+
+class InterceptionRule(Base):
+    """Model for storing interception rules."""
+    __tablename__ = "interception_rules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False)
+    enabled = Column(Boolean, default=True)
+    session_id = Column(Integer, ForeignKey("proxy_sessions.id"), nullable=False)
+    conditions = Column(JSON, nullable=False)  # List of {field, operator, value, use_regex}
+    action = Column(String, nullable=False)  # FORWARD, BLOCK, MODIFY
+    modification = Column(JSON, nullable=True)  # Headers/body modifications
+    priority = Column(Integer, nullable=False)
+    created_at = Column(DateTime, server_default="CURRENT_TIMESTAMP")
+    updated_at = Column(DateTime, server_default="CURRENT_TIMESTAMP")
+
+    # Relationships
+    session = relationship("ProxySession", back_populates="interception_rules")
 
 class ProxyHistoryEntry(Base):
     """Model for storing proxy request/response history."""
@@ -46,6 +65,12 @@ class ProxyHistoryEntry(Base):
     tags = Column(JSON, default=list)  # List of tags
     notes = Column(Text, nullable=True)
     is_intercepted = Column(Boolean, default=False)
+    applied_rules = Column(JSON, nullable=True)  # List of {rule_id, action, modifications}
+    
+    # TLS Information
+    tls_version = Column(String, nullable=True)  # TLS version (e.g., "TLSv1.3")
+    cipher_suite = Column(String, nullable=True)  # Cipher suite used
+    certificate_info = Column(JSON, nullable=True)  # Certificate details
     
     # Foreign Keys
     session_id = Column(Integer, ForeignKey("proxy_sessions.id"))

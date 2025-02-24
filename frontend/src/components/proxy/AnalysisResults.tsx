@@ -16,17 +16,10 @@ import {
     Info as InfoIcon,
     ExpandLess,
     ExpandMore,
+    Code as CodeIcon,
 } from '@mui/icons-material';
 import { useState } from 'react';
-
-interface AnalysisResult {
-    requestId: string;
-    ruleName: string;
-    severity: string;
-    description: string;
-    evidence: string;
-    timestamp: string;
-}
+import type { AnalysisResult } from '../../api/proxyApi';
 
 interface AnalysisResultsProps {
     results: AnalysisResult[];
@@ -141,15 +134,66 @@ const AnalysisResults: React.FC<AnalysisResultsProps> = ({ results }) => {
                                         >
                                             <code>{result.evidence}</code>
                                         </Paper>
-                                        <Typography
-                                            variant="caption"
-                                            color="text.secondary"
-                                            sx={{ display: 'block', mt: 1 }}
-                                        >
-                                            Request ID: {result.requestId}
-                                            <br />
-                                            Detected: {new Date(result.timestamp).toLocaleString()}
-                                        </Typography>
+
+                                        {/* Additional Analysis Details */}
+                                        {result.findings && (
+                                            <Box sx={{ mt: 2 }}>
+                                                <Typography variant="subtitle2" color="text.secondary" gutterBottom>
+                                                    Findings:
+                                                </Typography>
+                                                <Paper
+                                                    variant="outlined"
+                                                    sx={{
+                                                        p: 1,
+                                                        backgroundColor: 'background.default',
+                                                        fontFamily: 'monospace',
+                                                        overflowX: 'auto',
+                                                        maxWidth: '100%',
+                                                    }}
+                                                >
+                                                    <code>
+                                                        {JSON.stringify(result.findings, null, 2)}
+                                                    </code>
+                                                </Paper>
+                                            </Box>
+                                        )}
+
+                                        {/* Metadata Display */}
+                                        <Box sx={{ mt: 2 }}>
+                                            <Typography
+                                                variant="caption"
+                                                color="text.secondary"
+                                                sx={{ display: 'block' }}
+                                            >
+                                                Type: {result.analysis_type || 'General'}
+                                                <br />
+                                                Request ID: {result.requestId}
+                                                <br />
+                                                Detected: {new Date(result.timestamp).toLocaleString()}
+                                                {result.history_entry_id && (
+                                                    <>
+                                                        <br />
+                                                        History Entry: {result.history_entry_id}
+                                                    </>
+                                                )}
+                                            </Typography>
+                                        </Box>
+
+                                        {/* Analysis Metadata */}
+                                        {result.analysis_metadata && (
+                                            <Box sx={{ mt: 1 }}>
+                                                <Chip
+                                                    icon={<CodeIcon />}
+                                                    label="View Metadata"
+                                                    variant="outlined"
+                                                    size="small"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        console.log(result.analysis_metadata);
+                                                    }}
+                                                />
+                                            </Box>
+                                        )}
                                     </Box>
                                 </Collapse>
                             </React.Fragment>

@@ -1,152 +1,169 @@
-"""API models for proxy management."""
-from typing import Dict, List, Optional, Any
+"""API models for proxy functionality."""
+
+__all__ = [
+    "ConditionBase",
+    "ModificationBase",
+    "InterceptionRuleBase",
+    "InterceptionRuleCreate",
+    "InterceptionRuleUpdate",
+    "InterceptionRule",
+    "ProxyHistoryBase",
+    "ProxyHistory",
+    "ProxyAnalysisBase",
+    "ProxyAnalysis",
+    "ProxySessionBase",
+    "CreateProxySession",
+    "ProxySession",
+    "ProxySettings",
+    "ConnectionInfo",
+    "ConnectionEventInfo",
+]
 from datetime import datetime
-from pydantic import BaseModel, Field, validator, ConfigDict
+from typing import List, Optional, Dict, Any
+from pydantic import BaseModel
 
-from typing import TYPE_CHECKING
+class ConditionBase(BaseModel):
+    """Base model for an interception condition."""
+    field: str
+    operator: str
+    value: str
+    use_regex: bool = False
 
-if TYPE_CHECKING:
-    from api.proxy.database_models import ProxySession as DBProxySession, ProxyHistoryEntry
+class ModificationBase(BaseModel):
+    """Base model for request/response modifications."""
+    headers: Optional[Dict[str, str]] = None
+    body: Optional[str] = None
+    status_code: Optional[int] = None
+
+class InterceptionRuleBase(BaseModel):
+    """Base model for interception rules."""
+    name: str
+    enabled: bool = True
+    conditions: List[ConditionBase]
+    action: str
+    modification: Optional[ModificationBase] = None
+
+class InterceptionRuleCreate(InterceptionRuleBase):
+    """Model for creating a new interception rule."""
+    pass
+
+class InterceptionRuleUpdate(BaseModel):
+    """Model for updating an existing interception rule."""
+    name: Optional[str] = None
+    enabled: Optional[bool] = None
+    conditions: Optional[List[ConditionBase]] = None
+    action: Optional[str] = None
+    modification: Optional[ModificationBase] = None
+
+class InterceptionRule(InterceptionRuleBase):
+    """Model for a complete interception rule."""
+    id: int
+    session_id: int
+    priority: int
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class ProxyHistoryBase(BaseModel):
+    """Base model for proxy history entries."""
+    method: str
+    url: str
+    request_headers: Dict[str, str]
+    request_body: Optional[str] = None
+    response_status: Optional[int] = None
+    response_headers: Optional[Dict[str, str]] = None
+    response_body: Optional[str] = None
+    duration: Optional[float] = None
+    is_intercepted: bool = False
+    applied_rules: Optional[List[Dict[str, Any]]] = None
+    tags: List[str] = []
+    notes: Optional[str] = None
+
+class ProxyHistory(ProxyHistoryBase):
+    """Model for a complete history entry."""
+    id: int
+    session_id: int
+    timestamp: datetime
+
+    class Config:
+        from_attributes = True
+
+class ProxyAnalysisBase(BaseModel):
+    """Base model for proxy analysis results."""
+    analysis_type: str
+    findings: Dict[str, Any]
+    severity: Optional[str] = None
+    analysis_metadata: Optional[Dict[str, Any]] = None
+
+class ProxyAnalysis(ProxyAnalysisBase):
+    """Model for a complete analysis result."""
+    id: int
+    session_id: int
+    history_entry_id: Optional[int]
+    timestamp: datetime
+
+    class Config:
+        from_attributes = True
+
+class ProxySessionBase(BaseModel):
+    """Base model for proxy sessions."""
+    name: str
+    description: Optional[str] = None
+    settings: Dict[str, Any]
 
 class CreateProxySession(BaseModel):
     """Model for creating a new proxy session."""
-    name: str = Field(..., description="Session name")
-    description: Optional[str] = Field(None, description="Session description")
-    project_id: int = Field(..., description="ID of the project this session belongs to")
-    created_by: int = Field(..., description="ID of the user creating this session")
-    settings: Optional[Dict[str, Any]] = Field(None, description="Proxy settings for this session")
-
-class ProxySessionResponse(BaseModel):
-    """API response model for proxy sessions."""
-    id: int
     name: str
-    description: Optional[str]
     project_id: int
+    user_id: int
+    settings: Dict[str, Any]
+
+class ProxySession(ProxySessionBase):
+    """Model for a complete proxy session."""
+    id: int
     start_time: datetime
-    end_time: Optional[datetime]
+    end_time: Optional[datetime] = None
     is_active: bool
-    settings: Optional[Dict[str, Any]]
-    created_by: int
+    project_id: Optional[int]
+    created_by: Optional[int]
 
-    @classmethod
-    def from_db(cls, session: 'DBProxySession') -> "ProxySessionResponse":
-        """Create response model from database model."""
-        return cls(
-            id=session.id,
-            name=session.name,
-            description=session.description,
-            project_id=session.project_id,
-            start_time=session.start_time,
-            end_time=session.end_time,
-            is_active=session.is_active,
-            settings=session.settings,
-            created_by=session.created_by
-        )
+    class Config:
+        from_attributes = True
 
-class Header(BaseModel):
-    """HTTP header model."""
-    name: str
-    value: str
+class ConnectionEventInfo(BaseModel):
+    """Model for connection event information."""
+    type: str
+    direction: str
+    timestamp: float
+    status: str
+    bytes_transferred: Optional[int] = None
 
-class InterceptedRequest(BaseModel):
-    """Model for an intercepted HTTP request."""
+class ConnectionInfo(BaseModel):
+    """Model for active connection information."""
     id: str
-    method: str
-    url: str
-    headers: List[Header]
-    body: Optional[str] = None
-
-class InterceptedResponse(BaseModel):
-    """Model for an intercepted HTTP response."""
-    statusCode: int
-    headers: List[Header]
-    body: Optional[str] = None
+    host: str
+    port: int
+    start_time: float
+    end_time: Optional[float] = None
+    status: str
+    events: List[ConnectionEventInfo]
+    bytes_received: int
+    bytes_sent: int
+    requests_processed: int
+    error: Optional[str] = None
 
 class ProxySettings(BaseModel):
-    """Proxy server configuration settings."""
-    model_config = ConfigDict(str_strip_whitespace=True)
-    
-    host: str = Field(
-        ..., 
-        description="Proxy host address",
-        examples=["127.0.0.1"]
-    )
-    port: int = Field(
-        ...,
-        gt=0,
-        lt=65536,
-        description="Proxy port",
-        examples=[8080]
-    )
-    interceptRequests: bool = True
-    interceptResponses: bool = True
-    allowedHosts: List[str] = []
-    excludedHosts: List[str] = []
-    maxConnections: int = 100
-    maxKeepaliveConnections: int = 20
-    keepaliveTimeout: int = 30
-
-    @validator("host")
-    def validate_host(cls, v: str) -> str:
-        """Validate host address."""
-        v = v.strip()
-        if len(v) < 1:
-            raise ValueError("min_length validation failed")
-        return v
-
-class TagData(BaseModel):
-    """Tag request data."""
-    tag: str = Field(..., description="Tag to add")
-
-class NoteData(BaseModel):
-    """Note request data."""
-    note: str = Field(..., description="Note to set")
-
-class HistoryEntryResponse(BaseModel):
-    """API response model for history entries."""
-    id: int
-    timestamp: datetime
-    method: str
-    url: str
-    request_headers: Dict[str, Any]
-    request_body: Optional[str]
-    response_status: Optional[int]
-    response_headers: Optional[Dict[str, Any]]
-    response_body: Optional[str]
-    duration: Optional[float]
-    tags: List[str]
-    notes: Optional[str]
-    is_intercepted: bool
-    session_id: int
-
-    @classmethod
-    def from_entry(cls, entry: 'ProxyHistoryEntry') -> 'HistoryEntryResponse':
-        """Create response model from database history entry."""
-        return cls(
-            id=entry.id,
-            timestamp=entry.timestamp,
-            method=entry.method,
-            url=entry.url,
-            request_headers=entry.request_headers,
-            request_body=entry.request_body,
-            response_status=entry.response_status,
-            response_headers=entry.response_headers,
-            response_body=entry.response_body,
-            duration=entry.duration,
-            tags=entry.tags or [],
-            notes=entry.notes,
-            is_intercepted=entry.is_intercepted,
-            session_id=entry.session_id
-        )
-
-__all__ = [
-    'CreateProxySession',
-    'ProxySessionResponse',
-    'Header',
-    'InterceptedRequest', 
-    'InterceptedResponse',
-    'ProxySettings',
-    'TagData',
-    'NoteData',
-    'HistoryEntryResponse'
-]
+    """Model for proxy configuration settings."""
+    host: str = "0.0.0.0"
+    port: int = 8080
+    allowed_hosts: Optional[List[str]] = None
+    excluded_hosts: Optional[List[str]] = None
+    intercept_requests: bool = True
+    intercept_responses: bool = True
+    websocket_support: bool = False
+    history_size: int = 1000
+    keepalive_timeout: int = 5
+    ca_cert_path: Optional[str] = None
+    ca_key_path: Optional[str] = None

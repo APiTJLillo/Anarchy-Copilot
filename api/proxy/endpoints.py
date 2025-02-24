@@ -1,476 +1,418 @@
-"""Proxy API endpoint handlers."""
-import asyncio
-import logging
-import os
-from datetime import datetime
-from pathlib import Path
-from typing import Dict, List, Any, Optional, cast
-from fastapi import HTTPException, Body, Depends, WebSocket, BackgroundTasks
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.future import select
-from sqlalchemy.orm import selectinload
-
-from .utils import cleanup_port
-from proxy.server.proxy_server import ProxyServer  # Import directly from module
-from proxy.config import ProxyConfig
-from database import get_async_session
-from models.base import Project
-from . import router, get_proxy_server
-from .database_models import ProxySession, ProxyHistoryEntry
-from .models import (
-    CreateProxySession, 
-    ProxySessionResponse, 
-    ProxySettings, 
-    InterceptedRequest,
-    InterceptedResponse,
-    HistoryEntryResponse
-)
+"""FastAPI endpoints for proxy functionality."""
+from fastapi import WebSocket
 
 __all__ = [
-    "get_proxy_status",
+    "create_session",
+    "start_proxy",
+    "stop_proxy",
+    "get_history",
+    "clear_history",
     "get_analysis_results",
     "clear_analysis_results",
-    "test_endpoint",
-    "stop_proxy",
-    "start_proxy",
-    "websocket_endpoint",
-    "create_proxy_session",
-    "get_project_sessions",
-    "get_session",
-    "stop_session",
-    # Helper functions
-    "get_project_by_id",
-    "get_proxy_state",
-    "assert_server_running",
-    "require_proxy"
+    "get_proxy_status",
+    "create_rule",
+    "update_rule",
+    "delete_rule",
+    "list_rules",
+    "reorder_rules",
+    "get_connections",
 ]
+from typing import List, Optional
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import select, func, update
+from sqlalchemy.ext.asyncio import AsyncSession
+from datetime import datetime
 
+from database import get_async_session as get_db
+from . import models
+from .database_models import (
+    ProxySession,
+    ProxyHistoryEntry,
+    ProxyAnalysisResult,
+    InterceptionRule
+)
+
+import logging
+from functools import lru_cache
+from ..config import Settings
+from sqlalchemy.future import select
+
+
+@lru_cache()
+def get_settings() -> Settings:
+    """Get cached settings instance."""
+    return Settings()
+
+
+router = APIRouter()
+
+@router.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for real-time connection updates."""
+    from .websocket import handle_proxy_connection_updates
+    await handle_proxy_connection_updates(websocket)
 logger = logging.getLogger(__name__)
 
-# Use get_proxy_server to access the global instance
-proxy_server = get_proxy_server()
-
-async def get_project_by_id(session: AsyncSession, project_id: int) -> Project:
-    """Get project by ID or raise 404."""
-    result = await session.execute(
-        select(Project).where(Project.id == project_id)
-    )
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    return project
-
-@router.post("/sessions", response_model=ProxySessionResponse)
-async def create_proxy_session(
-    data: CreateProxySession,
-    db: AsyncSession = Depends(get_async_session)
-) -> ProxySessionResponse:
+# Session Management
+@router.post("/sessions", response_model=models.ProxySession)
+async def create_session(
+    data: models.CreateProxySession,
+    db: AsyncSession = Depends(get_db)
+) -> ProxySession:
     """Create a new proxy session."""
-    # Verify project exists
-    await get_project_by_id(db, data.project_id)
-    
-    # Create session
-    session = ProxySession(
-        name=data.name,
-        description=data.description,
-        project_id=data.project_id,
-        settings=data.settings,
-        created_by=data.created_by,
-        is_active=True
-    )
-    
-    db.add(session)
-    await db.commit()
-    await db.refresh(session)
-    
-    return ProxySessionResponse.from_db(session)
-
-@router.get("/projects/{project_id}/sessions", response_model=List[ProxySessionResponse])
-async def get_project_sessions(
-    project_id: int,
-    db: AsyncSession = Depends(get_async_session)
-) -> List[ProxySessionResponse]:
-    """Get all proxy sessions for a project."""
-    # Verify project exists
-    await get_project_by_id(db, project_id)
-    
-    # Get sessions
-    result = await db.execute(
-        select(ProxySession)
-        .where(ProxySession.project_id == project_id)
-        .order_by(ProxySession.start_time.desc())
-    )
-    sessions = result.scalars().all()
-    
-    return [ProxySessionResponse.from_db(session) for session in sessions]
-
-@router.get("/sessions/{session_id}", response_model=ProxySessionResponse)
-async def get_session(
-    session_id: int,
-    db: AsyncSession = Depends(get_async_session)
-) -> ProxySessionResponse:
-    """Get proxy session by ID."""
-    result = await db.execute(
-        select(ProxySession).where(ProxySession.id == session_id)
-    )
-    session = result.scalar_one_or_none()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-        
-    return ProxySessionResponse.from_db(session)
-
-@router.post("/sessions/{session_id}/stop")
-async def stop_session(
-    session_id: int,
-    db: AsyncSession = Depends(get_async_session)
-) -> Dict[str, str]:
-    """Stop a proxy session."""
-    # Get session
-    result = await db.execute(
-        select(ProxySession).where(ProxySession.id == session_id)
-    )
-    session = result.scalar_one_or_none()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-        
-    if not session.is_active:
-        return {"message": "Session is already stopped"}
-        
-    # Stop session
-    session.is_active = False
-    session.end_time = datetime.utcnow()
-    
-    await db.commit()
-    await db.refresh(session)
-    
-    return {"message": "Session stopped successfully"}
-
-def get_proxy_state() -> Optional[ProxyServer]:
-    """Get current proxy server instance."""
-    global proxy_server
-    if proxy_server and proxy_server.is_running:
-        return proxy_server
-    return None
-
-def assert_server_running(server: Optional[ProxyServer]) -> ProxyServer:
-    """Assert server is running and return it."""
-    if not server or not server.is_running:
-        raise HTTPException(
-            status_code=400,
-            detail="Proxy server is not running"
-        )
-    return cast(ProxyServer, server)  # Cast for type checker
-
-def require_proxy() -> ProxyServer:
-    """Assert that proxy server is running and return it."""
-    return assert_server_running(get_proxy_state())
-
-@router.get("/status", response_model=Dict[str, Any])
-async def get_proxy_status(
-    db: AsyncSession = Depends(get_async_session)
-) -> Dict[str, Any]:
-    """Get current proxy server status."""
-    logger.debug("Proxy status endpoint called")
-    
-    server = get_proxy_state()
-    is_running = bool(server and server.is_running)
-    
-    # Find active session if proxy is running
-    active_session = None
-    if is_running:
-        result = await db.execute(
-            select(ProxySession)
+    try:
+        # Deactivate any currently active sessions
+        await db.execute(
+            update(ProxySession)
             .where(ProxySession.is_active == True)
-            .order_by(ProxySession.start_time.desc())
-            .limit(1)
-        )
-        active_session = result.scalar_one_or_none()
-    
-    status = {
-        "isRunning": is_running,
-        "settings": {
-            "host": "127.0.0.1",
-            "port": 8080,
-            "interceptRequests": False,
-            "interceptResponses": False,
-            "allowedHosts": [],
-            "excludedHosts": [],
-            "maxConnections": 100,
-            "maxKeepaliveConnections": 20,
-            "keepaliveTimeout": 30
-        },
-        "session": None
-    }
-    
-    if server and is_running:
-        status["settings"].update({
-            "interceptRequests": server.config.intercept_requests,
-            "interceptResponses": server.config.intercept_responses,
-            "allowedHosts": list(server.config.allowed_hosts),
-            "excludedHosts": list(server.config.excluded_hosts)
-        })
-        
-        if active_session:
-            status["session"] = {
-                "id": active_session.id,
-                "name": active_session.name,
-                "description": active_session.description,
-                "project_id": active_session.project_id,
-                "created_by": active_session.created_by,
-                "start_time": active_session.start_time.isoformat() if active_session.start_time else None
-            }
-    
-    logger.debug(f"Proxy status: {status}")
-    return status
-
-@router.get("/history", response_model=List[HistoryEntryResponse])
-async def get_proxy_history(
-    db: AsyncSession = Depends(get_async_session),
-    limit: int = 100,
-    offset: int = 0
-) -> List[HistoryEntryResponse]:
-    """Get proxy request/response history."""
-    logger.debug("Proxy history endpoint called with limit=%d offset=%d", limit, offset)
-    
-    try:
-        # Get history entries directly, with pagination
-        query = (
-            select(ProxyHistoryEntry)
-            .order_by(ProxyHistoryEntry.timestamp.desc())
-            .offset(offset)
-            .limit(limit)
-        )
-        
-        logger.debug("Executing query: %s", query)
-        result = await db.execute(query)
-        entries = result.scalars().all()
-        logger.debug("Found %d history entries", len(entries))
-
-        response_data = [HistoryEntryResponse.from_entry(entry) for entry in entries]
-        logger.debug("Returning %d formatted entries", len(response_data))
-        
-        return response_data
-
-    except Exception as e:
-        logger.error("Error fetching proxy history: %s", str(e), exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to fetch proxy history: {str(e)}"
+            .values(is_active=False, end_time=datetime.utcnow())
         )
 
-@router.get("/settings", response_model=Dict[str, Any])
-async def get_proxy_settings(
-    db: AsyncSession = Depends(get_async_session)
-) -> Dict[str, Any]:
-    """Get current proxy settings."""
-    logger.debug("Proxy settings endpoint called")
-    
-    server = get_proxy_state()
-    if not server or not server.is_running:
-        raise HTTPException(status_code=400, detail="Proxy server is not running")
-    
-    settings = {
-        "host": server.config.host,
-        "port": server.config.port,
-        "interceptRequests": server.config.intercept_requests,
-        "interceptResponses": server.config.intercept_responses,
-        "allowedHosts": list(server.config.allowed_hosts),
-        "excludedHosts": list(server.config.excluded_hosts),
-        "maxConnections": server.config.max_connections,
-        "maxKeepaliveConnections": server.config.max_keepalive_connections,
-        "keepaliveTimeout": server.config.keepalive_timeout
-    }
-    
-    return settings
+        # Create new session
+        # Merge settings with defaults from config
+        config = get_settings()
+        default_settings = {
+            "host": config.proxy_host,
+            "port": config.proxy_port,
+            "interceptRequests": config.proxy_intercept_requests,
+            "interceptResponses": config.proxy_intercept_responses,
+            "maxConnections": config.proxy_max_connections,
+            "maxKeepaliveConnections": config.proxy_max_keepalive_connections,
+            "keepaliveTimeout": config.proxy_keepalive_timeout,
+        }
+        merged_settings = {**default_settings, **(data.settings or {})}
 
-@router.get("/analysis/results", response_model=List[Dict[str, Any]])
-async def get_analysis_results():
-    """Get proxy analysis results."""
-    logger.debug("Analysis results endpoint called")
-    return []
-
-@router.delete("/analysis/results")
-async def clear_analysis_results():
-    """Clear all analysis results."""
-    logger.debug("Clear analysis results endpoint called")
-    return {"message": "Analysis results cleared successfully"}
-
-@router.get("/test")
-async def test_endpoint() -> Dict[str, str]:
-    """Test endpoint to verify routing."""
-    logger.debug("Test endpoint called")
-    return {"status": "ok", "message": "Test endpoint working"}
-
-@router.post("/stop", status_code=201)
-async def stop_proxy(
-    background_tasks: BackgroundTasks,
-    db: AsyncSession = Depends(get_async_session)
-) -> Dict[str, str]:
-    """Stop proxy server and end active session."""
-    server = get_proxy_state()
-    
-    if not server:
-        return {"message": "Proxy server is already stopped"}
-
-    # End active session if any
-    result = await db.execute(
-        select(ProxySession)
-        .where(ProxySession.is_active == True)
-        .order_by(ProxySession.start_time.desc())
-        .limit(1)
-    )
-    active_session = result.scalar_one_or_none()
-    
-    if active_session:
-        active_session.is_active = False
-        active_session.end_time = datetime.utcnow()
+        session = ProxySession(
+            name=data.name,
+            project_id=data.project_id,
+            created_by=data.user_id,
+            settings=merged_settings or {},
+            is_active=True
+        )
+        db.add(session)
         await db.commit()
-
-    global proxy_server
-    server_ref = server
-    proxy_server = None
-
-    async def do_stop(server: ProxyServer) -> None:
-        try:
-            await asyncio.wait_for(server.stop(), timeout=5.0)
-            logger.info("Proxy server stopped successfully")
-        except Exception as e:
-            logger.warning(f"Non-critical error during stop: {e}")
-
-    background_tasks.add_task(do_stop, server_ref)
-    
-    message = "Proxy server stopped successfully"
-    if active_session:
-        message += f" and session {active_session.id} ended"
-    
-    return {"message": message}
-
-@router.post("/sessions/{session_id}/start", status_code=201)
-async def start_proxy(
-    session_id: int,
-    settings: ProxySettings = Body(...),
-    db: AsyncSession = Depends(get_async_session)
-) -> Dict[str, str]:
-    """Start proxy server for a session."""
-    global proxy_server
-    
-    # Get session
-    result = await db.execute(
-        select(ProxySession).where(ProxySession.id == session_id)
-    )
-    session = result.scalar_one_or_none()
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
-
-    if not session.is_active:
-        raise HTTPException(status_code=400, detail="Cannot start proxy for inactive session")
-    
-    # Stop existing proxy if running
-    if get_proxy_state():
-        await stop_proxy(BackgroundTasks())
-    
-    # Ensure port is free
-    max_cleanup_retries = 3
-    for attempt in range(max_cleanup_retries):
-        if await cleanup_port(settings.port, logger):
-            break
-        if attempt == max_cleanup_retries - 1:
-            raise HTTPException(status_code=500, detail=f"Failed to free port {settings.port}")
-        await asyncio.sleep(2)
-    
-    try:
-        logger.debug(f"Starting proxy with settings: {settings}")
-        ca_cert_path = os.getenv("CA_CERT_PATH")
-        ca_key_path = os.getenv("CA_KEY_PATH")
-        
-        if not ca_cert_path or not ca_key_path:
-            raise ValueError("CA_CERT_PATH and CA_KEY_PATH must be set in the environment variables.")
-        
-        config = ProxyConfig(
-            host=settings.host,
-            port=settings.port,
-            intercept_requests=settings.interceptRequests,
-            intercept_responses=settings.interceptResponses,
-            excluded_hosts=set(settings.excludedHosts),
-            max_connections=settings.maxConnections,
-            max_keepalive_connections=settings.maxKeepaliveConnections,
-            keepalive_timeout=settings.keepaliveTimeout,
-            ca_cert_path=Path(os.getenv("CA_CERT_PATH")),
-            ca_key_path=Path(os.getenv("CA_KEY_PATH"))
-        )
-
-        # Store settings in session
-        session.settings = settings.dict()
-        await db.commit()
-        
-        # Create and start the proxy server
-        proxy_server = ProxyServer(config, add_default_interceptors=False)
-        logger.debug("Proxy server instance created")
-        
-        # Start the proxy server with retries
-        max_retries = 3
-        for attempt in range(max_retries):
-            try:
-                logger.info(f"Starting proxy server on {config.host}:{config.port} (attempt {attempt + 1})")
-                await proxy_server.start()
-                logger.info(f"Proxy server started successfully on {config.host}:{config.port}")
-                break
-            except Exception as e:
-                if attempt == max_retries - 1:
-                    logger.error(f"Failed to start proxy server after {max_retries} attempts: {e}")
-                    raise
-                logger.warning(f"Failed to start proxy server (attempt {attempt + 1}): {e}")
-                await asyncio.sleep(2)
-        logger.info(f"Proxy server started successfully for session {session_id}")
-        return {"message": "Proxy server started successfully", "session_id": session_id}
-        
+        await db.refresh(session)
+        return session
     except Exception as e:
-        logger.error(f"Failed to start proxy: {e}", exc_info=True)
-        proxy_server = None
+        logger.error(f"Failed to create session: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.websocket("/ws/intercept")
-async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint for real-time proxy interception."""
-    await websocket.accept()
+# Proxy Control
+@router.post("/sessions/{session_id}/start")
+async def start_proxy(
+    session_id: int,
+    settings: models.ProxySettings,
+    db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Start the proxy with the specified settings."""
     try:
-        await websocket.send_json({"type": "connected"})
-        
-        while True:
-            data = await websocket.receive_json()
-            if "type" not in data:
-                await websocket.send_json({"type": "error", "message": "Missing type"})
-                continue
-                
-            try:
-                if data["type"] == "request":
-                    await websocket.send_json({
-                        "type": "request_processed",
-                        "requestId": data.get("requestId"),
-                        "success": True
-                    })
-                elif data["type"] == "response":
-                    await websocket.send_json({
-                        "type": "response_processed",
-                        "requestId": data.get("requestId"),
-                        "success": True
-                    })
-                else:
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": f"Unknown type: {data['type']}"
-                    })
-            except Exception as e:
-                logger.error(f"Error processing WebSocket message: {e}")
-                await websocket.send_json({
-                    "type": "error",
-                    "message": str(e)
-                })
-                
+        config = get_settings()
+        result = await db.execute(
+            select(ProxySession).where(ProxySession.id == session_id)
+        )
+        session = result.scalar_one_or_none()
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        session.is_active = True
+        session.settings.update(settings)
+        await db.commit()
+
+        return {"status": "started", "session_id": session_id}
     except Exception as e:
-        logger.error(f"WebSocket error: {e}")
-        if not websocket.client_state.DISCONNECTED:
-            await websocket.close(code=1011, reason=str(e))
-    finally:
-        if not websocket.client_state.DISCONNECTED:
-            await websocket.close()
+        logger.error(f"Failed to start proxy: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/stop")
+async def stop_proxy(db: AsyncSession = Depends(get_db)) -> dict:
+    """Stop the active proxy session."""
+    try:
+        await db.execute(
+            update(ProxySession)
+            .where(ProxySession.is_active == True)
+            .values(is_active=False, end_time=datetime.utcnow())
+        )
+        await db.commit()
+        return {"status": "stopped"}
+    except Exception as e:
+        logger.error(f"Failed to stop proxy: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# History Management
+@router.get("/history", response_model=List[models.ProxyHistory])
+async def get_history(
+    session_id: Optional[int] = None,
+    limit: int = 100,
+    db: AsyncSession = Depends(get_db)
+) -> List[ProxyHistoryEntry]:
+    """Get proxy history entries."""
+    try:
+        # Build query with proper type hints
+        stmt = (
+            select(ProxyHistoryEntry)
+            .order_by(ProxyHistoryEntry.timestamp.desc())
+            .limit(limit)
+        )
+        if session_id:
+            stmt = stmt.where(ProxyHistoryEntry.session_id == session_id)
+
+        # Execute and handle results properly
+        result = await db.execute(stmt)
+        entries = list(result.scalars().all())
+        return entries
+    except Exception as e:
+        logger.error(f"Failed to get history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/history")
+async def clear_history(
+    session_id: Optional[int] = None,
+    db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Clear proxy history."""
+    try:
+        if session_id:
+            await db.execute(
+                """DELETE FROM proxy_history WHERE session_id = :session_id""",
+                {"session_id": session_id}
+            )
+        else:
+            await db.execute("""DELETE FROM proxy_history""")
+        await db.commit()
+        return {"message": "History cleared"}
+    except Exception as e:
+        logger.error(f"Failed to clear history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+# Analysis Management
+@router.get("/analysis", response_model=List[models.ProxyAnalysis])
+async def get_analysis_results(
+    session_id: Optional[int] = None,
+    db: AsyncSession = Depends(get_db)
+) -> List[ProxyAnalysisResult]:
+    """Get analysis results."""
+    try:
+        # Build query with proper type hints
+        stmt = (
+            select(ProxyAnalysisResult)
+            .order_by(ProxyAnalysisResult.timestamp.desc())
+        )
+        if session_id:
+            stmt = stmt.where(ProxyAnalysisResult.session_id == session_id)
+        
+        # Execute and handle results properly
+        result = await db.execute(stmt)
+        entries = list(result.scalars().all())
+        return entries
+    except Exception as e:
+        logger.error(f"Failed to get analysis results: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/analysis")
+async def clear_analysis_results(
+    session_id: Optional[int] = None,
+    db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Clear analysis results."""
+    try:
+        if session_id:
+            await db.execute(
+                """DELETE FROM proxy_analysis_results WHERE session_id = :session_id""",
+                {"session_id": session_id}
+            )
+        else:
+            await db.execute("""DELETE FROM proxy_analysis_results""")
+        await db.commit()
+        return {"message": "Analysis results cleared"}
+    except Exception as e:
+        logger.error(f"Failed to clear analysis results: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/connections", response_model=List[models.ConnectionInfo])
+async def get_connections(db: AsyncSession = Depends(get_db)) -> List[models.ConnectionInfo]:
+    """Get all active proxy connections."""
+    try:
+        # Get connection info from TunnelProtocol class
+        from proxy.server.custom_protocol import TunnelProtocol
+        active_connections = []
+
+        for conn_id, conn_info in TunnelProtocol._active_connections.items():
+            connection = models.ConnectionInfo(
+                id=conn_id,
+                host=conn_info.get("host", "unknown"),
+                port=conn_info.get("port", 0),
+                start_time=conn_info.get("created_at", datetime.utcnow()).timestamp(),
+                status="active" if not conn_info.get("end_time") else "closed",
+                events=conn_info.get("events", []),
+                bytes_received=conn_info.get("bytes_received", 0),
+                bytes_sent=conn_info.get("bytes_sent", 0),
+                requests_processed=conn_info.get("requests_processed", 0),
+                error=conn_info.get("error")
+            )
+            if conn_info.get("end_time"):
+                connection.end_time = conn_info["end_time"].timestamp()
+
+            active_connections.append(connection)
+
+        return active_connections
+    except Exception as e:
+        logger.error(f"Failed to get connections: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/status")
+async def get_proxy_status(db: AsyncSession = Depends(get_db)) -> dict:
+    """Get the current proxy status."""
+    try:
+        # Get active session
+        stmt = select(ProxySession).where(ProxySession.is_active == True)
+        result = await db.execute(stmt)
+        active_session = result.scalar_one_or_none()
+
+        # Get latest history entries - limited to scalar values
+        stmt = select(ProxyHistoryEntry.id).order_by(ProxyHistoryEntry.timestamp.desc()).limit(100)
+        result = await db.execute(stmt)
+        recent_history_ids = [row[0] for row in result]
+
+        return {
+            "isRunning": active_session is not None,
+            "settings": active_session.settings if active_session else {},
+            "interceptRequests": active_session.settings.get("interceptRequests", True) if active_session else False,
+            "interceptResponses": active_session.settings.get("interceptResponses", True) if active_session else False,
+            "allowedHosts": active_session.settings.get("allowedHosts", []) if active_session else [],
+            "excludedHosts": active_session.settings.get("excludedHosts", []) if active_session else [],
+            "history": recent_history_ids
+        }
+    except Exception as e:
+        logger.error(f"Failed to get proxy status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/sessions/{session_id}/rules", response_model=models.InterceptionRule)
+async def create_rule(
+    rule: models.InterceptionRuleCreate,
+    session_id: int,
+    db: AsyncSession = Depends(get_db)
+) -> InterceptionRule:
+    """Create a new interception rule."""
+    # Verify session exists and is active
+    result = await db.execute(
+        select(ProxySession)
+        .where(ProxySession.id == session_id)
+        .where(ProxySession.is_active == True)
+    )
+    session = result.scalar_one_or_none()
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found or not active")
+
+    # Get highest priority and increment
+    result = await db.execute(
+        select(func.max(InterceptionRule.priority))
+        .where(InterceptionRule.session_id == session_id)
+    )
+    max_priority = result.scalar() or 0
+    
+    # Create new rule
+    db_rule = InterceptionRule(
+        name=rule.name,
+        enabled=rule.enabled,
+        session_id=session_id,
+        conditions=rule.conditions,
+        action=rule.action,
+        modification=rule.modification,
+        priority=max_priority + 1
+    )
+    
+    db.add(db_rule)
+    await db.commit()
+    await db.refresh(db_rule)
+    return db_rule
+
+@router.put("/rules/{rule_id}", response_model=models.InterceptionRule)
+async def update_rule(
+    rule_id: int,
+    rule_update: models.InterceptionRuleUpdate,
+    db: AsyncSession = Depends(get_db)
+) -> InterceptionRule:
+    """Update an existing interception rule."""
+    result = await db.execute(
+        select(InterceptionRule).where(InterceptionRule.id == rule_id)
+    )
+    db_rule = result.scalar_one_or_none()
+    if not db_rule:
+        raise HTTPException(status_code=404, detail="Rule not found")
+
+    if rule_update.name is not None:
+        db_rule.name = rule_update.name
+    if rule_update.enabled is not None:
+        db_rule.enabled = rule_update.enabled
+    if rule_update.conditions is not None:
+        db_rule.conditions = rule_update.conditions
+    if rule_update.action is not None:
+        db_rule.action = rule_update.action
+    if rule_update.modification is not None:
+        db_rule.modification = rule_update.modification
+    
+    db_rule.updated_at = datetime.utcnow()
+    await db.commit()
+    await db.refresh(db_rule)
+    return db_rule
+
+@router.delete("/rules/{rule_id}")
+async def delete_rule(
+    rule_id: int,
+    db: AsyncSession = Depends(get_db)
+):
+    """Delete an interception rule."""
+    result = await db.execute(
+        select(InterceptionRule).where(InterceptionRule.id == rule_id)
+    )
+    db_rule = result.scalar_one_or_none()
+    if not db_rule:
+        raise HTTPException(status_code=404, detail="Rule not found")
+
+    await db.delete(db_rule)
+    await db.commit()
+    return {"message": "Rule deleted"}
+
+@router.get("/sessions/{session_id}/rules", response_model=List[models.InterceptionRule])
+async def list_rules(
+    session_id: int,
+    enabled_only: bool = False,
+    db: AsyncSession = Depends(get_db)
+) -> List[InterceptionRule]:
+    """List interception rules, optionally filtered by session."""
+    try:
+        # Build query with proper type hints
+        stmt = select(InterceptionRule).order_by(InterceptionRule.priority)
+        if session_id:
+            stmt = stmt.where(InterceptionRule.session_id == session_id)
+        if enabled_only:
+            stmt = stmt.where(InterceptionRule.enabled == True)
+        
+        # Execute and handle results properly
+        result = await db.execute(stmt)
+        rules = list(result.scalars().all())
+        return rules
+    except Exception as e:
+        logger.error(f"Failed to list rules: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.put("/rules/reorder")
+async def reorder_rules(
+    rule_ids: List[int],
+    db: AsyncSession = Depends(get_db)
+) -> dict:
+    """Reorder rules by assigning new priorities."""
+    # Verify all rules exist
+    result = await db.execute(
+        select(InterceptionRule).where(InterceptionRule.id.in_(rule_ids))
+    )
+    existing_rules = {rule.id: rule for rule in result.scalars().all()}
+    if len(existing_rules) != len(rule_ids):
+        raise HTTPException(status_code=400, detail="Some rules not found")
+
+    # Update priorities
+    for priority, rule_id in enumerate(rule_ids, start=1):
+        existing_rules[rule_id].priority = priority
+    
+    await db.commit()
+    return {"message": "Rules reordered successfully"}

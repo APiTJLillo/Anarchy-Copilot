@@ -1,0 +1,33 @@
+# Stress Testing Configuration
+concurrent_connections: 1000
+request_count: 100000
+warmup_requests: 5000
+cooldown_time: 30
+
+# Aggressive thresholds
+min_throughput: 10000.0
+max_latency_p95: 0.05
+max_memory_mb: 2048.0
+max_cpu_percent: 90.0
+
+# Large data sizes for stress testing
+data_sizes: [1048576, 5242880, 10485760]  # 1MB, 5MB, 10MB
+data_distributions:
+  small: 0.2    # 20% 1MB
+  medium: 0.3   # 30% 5MB
+  large: 0.5    # 50% 10MB
+
+# Stress test settings
+save_raw_data: true
+disable_gc: true
+process_priority: -20  # Maximum priority
+thread_count: 0       # Auto-optimize
+
+# Visualization settings
+chart_size: [16, 9]   # Larger charts for detailed analysis
+plot_style: "seaborn-dark"
+
+# Additional stress parameters
+max_retries: 3        # Retry failed requests
+timeout: 30           # Longer timeout for large payloads
+keep_alive: true      # Keep connections alive

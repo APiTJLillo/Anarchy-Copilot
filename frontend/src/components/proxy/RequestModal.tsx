@@ -62,7 +62,36 @@ export const RequestModal: React.FC<RequestModalProps> = ({
 
     if (!request) return null;
 
-    const formatData = (data: any) => {
+    const formatData = (data: any, headers?: Record<string, string>) => {
+        // If data is a hex string, try to convert it back to readable format
+        if (typeof data === 'string' && /^[0-9A-Fa-f]+$/.test(data)) {
+            const bytes = new Uint8Array(data.match(/.{1,2}/g)?.map(byte => parseInt(byte, 16)) || []);
+            const contentType = headers?.['content-type'] || '';
+
+            // Handle text-based content types
+            if (contentType.includes('text/') ||
+                contentType.includes('application/json') ||
+                contentType.includes('application/xml') ||
+                contentType.includes('application/javascript')) {
+                try {
+                    const text = new TextDecoder().decode(bytes);
+                    if (contentType.includes('json')) {
+                        return JSON.stringify(JSON.parse(text), null, 2);
+                    }
+                    return text;
+                } catch (e) {
+                    return `[Binary data - ${bytes.length} bytes]`;
+                }
+            }
+
+            // Handle other content types
+            if (contentType.startsWith('image/')) {
+                return `[Image data - ${bytes.length} bytes]`;
+            }
+            return `[Binary data - ${bytes.length} bytes (${contentType || 'unknown type'})]`;
+        }
+
+        // Handle regular string data
         if (typeof data === 'string') {
             try {
                 return JSON.stringify(JSON.parse(data), null, 2);
@@ -117,7 +146,7 @@ export const RequestModal: React.FC<RequestModalProps> = ({
                     <Typography variant="h6" gutterBottom>Headers</Typography>
                     <Box sx={{ bgcolor: 'background.paper', p: 2, borderRadius: 1, mb: 2 }}>
                         <pre style={{ margin: 0, overflow: 'auto' }}>
-                            {formatData(request.request_headers)}
+                            {formatData(request.request_headers, request.request_headers)}
                         </pre>
                     </Box>
 
@@ -126,7 +155,7 @@ export const RequestModal: React.FC<RequestModalProps> = ({
                             <Typography variant="h6" gutterBottom>Body</Typography>
                             <Box sx={{ bgcolor: 'background.paper', p: 2, borderRadius: 1 }}>
                                 <pre style={{ margin: 0, overflow: 'auto' }}>
-                                    {formatData(request.request_body)}
+                                    {formatData(request.request_body, request.request_headers)}
                                 </pre>
                             </Box>
                         </>
@@ -137,7 +166,7 @@ export const RequestModal: React.FC<RequestModalProps> = ({
                     <Typography variant="h6" gutterBottom>Headers</Typography>
                     <Box sx={{ bgcolor: 'background.paper', p: 2, borderRadius: 1, mb: 2 }}>
                         <pre style={{ margin: 0, overflow: 'auto' }}>
-                            {formatData(request.response_headers)}
+                            {formatData(request.response_headers, request.response_headers)}
                         </pre>
                     </Box>
 
@@ -146,7 +175,7 @@ export const RequestModal: React.FC<RequestModalProps> = ({
                             <Typography variant="h6" gutterBottom>Body</Typography>
                             <Box sx={{ bgcolor: 'background.paper', p: 2, borderRadius: 1 }}>
                                 <pre style={{ margin: 0, overflow: 'auto' }}>
-                                    {formatData(request.response_body)}
+                                    {formatData(request.response_body, request.response_headers)}
                                 </pre>
                             </Box>
                         </>

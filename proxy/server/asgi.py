@@ -23,70 +23,13 @@ class ASGIHandler:
     ) -> None:
         """Handle ASGI request."""
         if scope["type"] == "http":
-            # Get current protocol if it's a CONNECT request
             if scope.get("method") == "CONNECT":
-                # Get tunnel protocol
-                server = scope.get('server')
-                tunnel_protocol = None
-                if server and hasattr(server, 'protocols'):
-                    for protocol in server.protocols:
-                        if isinstance(protocol, TunnelProtocol):
-                            tunnel_protocol = protocol
-                            break
-
-                # Handle CONNECT with tunnel protocol
-                if tunnel_protocol:
-                    logger.debug("ASGI layer: Processing CONNECT request")
-                    try:
-                        # Create h11 request from ASGI scope
-                        host = scope.get("path", "").replace("/", "")  # Remove any slashes
-                        h11_request = h11.Request(
-                            method=b"CONNECT",
-                            target=host.encode(),  # Use raw host:port as target
-                            headers=scope["headers"]  # Headers are already in correct format
-                        )
-
-                        # Let TunnelProtocol handle it
-                        logger.debug(f"Forwarding CONNECT {host} to TunnelProtocol")
-                        await tunnel_protocol.handle_request(h11_request)
-
-                        # Drain any remaining request body
-                        while True:
-                            message = await receive()
-                            if message["type"] == "http.disconnect":
-                                break
-
-                        return
-
-                    except Exception as e:
-                        logger.error(f"Tunnel error: {e}", exc_info=True)
-                        await send({
-                            "type": "http.response.start",
-                            "status": 502,
-                            "headers": [(b"content-type", b"text/plain")]
-                        })
-                        await send({
-                            "type": "http.response.body",
-                            "body": f"Tunnel failed: {str(e)}".encode()
-                        })
-                        return
-
-                # No tunnel protocol available
-                await send({
-                    "type": "http.response.start",
-                    "status": 502,
-                    "headers": [(b"content-type", b"text/plain")]
-                })
-                await send({
-                    "type": "http.response.body",
-                    "body": b"Tunnel protocol not available"
-                })
-                return
-            
-            # Handle regular HTTP request
-            response = await self.proxy_server.handle_request(scope, receive, send)
-            if response:
-                await self._send_response(send, response)
+                await self._handle_connect(scope, receive, send)
+            else:
+                # Handle regular HTTP request
+                response = await self.proxy_server.handle_request(scope, receive, send)
+                if response:
+                    await self._send_response(send, response)
         elif scope["type"] == "lifespan":
             await self._handle_lifespan(scope, receive, send)
         else:
@@ -98,6 +41,78 @@ class ASGIHandler:
                     "reason": "WebSocket connections not supported",
                 })
             return
+
+    async def _handle_connect(self, scope: Scope, receive: Receive, send: Send) -> None:
+        """Handle CONNECT requests for HTTPS tunneling."""
+        # Get tunnel protocol from transport
+        transport = scope.get('transport')
+        protocol = None
+        if transport and hasattr(transport, 'get_protocol'):
+            protocol = transport.get_protocol()
+        elif transport and hasattr(transport, '_protocol'):
+            protocol = transport._protocol
+
+        tunnel_protocol = protocol if isinstance(protocol, TunnelProtocol) else None
+
+        if not tunnel_protocol:
+            logger.error("Could not get tunnel protocol from connection")
+            await self._send_error(send, 502, "Internal server error: missing tunnel protocol")
+            return
+
+        # Extract host and port from path
+        target = scope.get("path", "").replace("/", "")  # Remove any slashes
+        try:
+            if ":" in target:
+                host, port = target.split(":", 1)
+                port = int(port)
+            else:
+                host = target
+                port = 443  # Default to HTTPS port
+
+            if not host or port <= 0 or port > 65535:
+                raise ValueError("Invalid host or port")
+
+        except (ValueError, TypeError) as e:
+            logger.error(f"Invalid CONNECT target: {target}")
+            await self._send_error(send, 400, "Invalid CONNECT target")
+            return
+
+        # Send initial CONNECT response
+        try:
+            await send({
+                "type": "http.response.start",
+                "status": 200,
+                "headers": [
+                    (b"connection", b"keep-alive"),
+                    (b"proxy-connection", b"keep-alive"),
+                    (b"server", b"Anarchy-Copilot-Proxy"),
+                ]
+            })
+            await send({
+                "type": "http.response.body",
+                "body": b"",
+                "more_body": False
+            })
+
+            # Handle CONNECT with tunnel protocol
+            try:
+                logger.debug(f"Processing CONNECT request for {host}:{port}")
+                await tunnel_protocol._handle_connect(host, port)
+
+                # Drain any remaining request body
+                while True:
+                    message = await receive()
+                    if message["type"] == "http.disconnect":
+                        break
+
+            except Exception as e:
+                logger.error(f"Tunnel error: {e}", exc_info=True)
+                # No need to send error response here since we already sent 200
+                await tunnel_protocol._cleanup(error=str(e))
+
+        except Exception as e:
+            logger.error(f"Failed to send CONNECT response: {e}", exc_info=True)
+            await self._send_error(send, 502, f"Failed to establish tunnel: {str(e)}")
 
     async def _handle_lifespan(
         self, 
@@ -142,4 +157,19 @@ class ASGIHandler:
         await send({
             "type": "http.response.body",
             "body": response.body
+        })
+
+    async def _send_error(self, send: Send, status: int, message: str) -> None:
+        """Send error response."""
+        await send({
+            "type": "http.response.start",
+            "status": status,
+            "headers": [
+                (b"content-type", b"text/plain"),
+                (b"connection", b"close")
+            ]
+        })
+        await send({
+            "type": "http.response.body",
+            "body": message.encode()
         })

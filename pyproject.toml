@@ -2,8 +2,77 @@
 requires = ["setuptools>=42", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[project]
+name = "anarchy-copilot"
+description = "AI-powered bug bounty suite"
+authors = [
+    {name = "Anarchy Copilot Team", email = "info@anarchycopilot.org"}
+]
+requires-python = ">=3.8"
+license = {text = "MIT"}
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Topic :: Security",
+]
+dynamic = [
+    "version",
+    "readme",
+    "scripts",
+    "dependencies",
+    "optional-dependencies"
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "version.__version__"}
+readme = {file = "README.md"}
+
+
+
 [tool.mypy]
 mypy_path = "stubs"
 ignore_missing_imports = true
 namespace_packages = true
 explicit_package_bases = true
+plugins = [
+    "pydantic.mypy"
+]
+check_untyped_defs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+strict_optional = true
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+warn_untyped_fields = true
+
+[tool.black]
+line-length = 100
+target-version = ['py38']
+include = '\.pyi?$'
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+line_length = 100
+
+[tool.pytest.ini_options]
+minversion = "6.0"
+addopts = "-ra -q"
+testpaths = [
+    "tests",
+]

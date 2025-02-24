@@ -28,7 +28,7 @@ RUN wget https://github.com/projectdiscovery/nuclei/releases/download/v2.9.0/nuc
 WORKDIR /app
 
 # Set environment variables for pyppeteer
-ENV PYTHONPATH=/app
+ENV PYTHONPATH=/app/anarchy_copilot
 ENV PYPPETEER_DOWNLOAD_HOST=https://npm.taobao.org/mirrors
 ENV PYPPETEER_CHROMIUM_REVISION=1095492
 ENV PYPPETEER_NO_DOWNLOAD=1
@@ -43,21 +43,21 @@ RUN pip install --no-cache-dir \
     watchdog \
     pre-commit
 
-# Copy requirements files
-COPY requirements*.txt ./
-COPY tests/requirements-test.txt ./tests/
+# Copy project files before installing dependencies
+COPY . /app
 
-# Install project dependencies
-RUN pip install --no-cache-dir -r requirements.txt \
-    && pip install --no-cache-dir -r tests/requirements-test.txt
-
-# Copy project files
-COPY . .
+# Install dependencies in order
+RUN pip install --no-cache-dir -e /app && \
+    pip install --no-cache-dir -r /app/requirements.txt && \
+    pip install --no-cache-dir -r /app/tests/requirements-test.txt && \
+    pip install --no-cache-dir -e /app[dev] && \
+    pip install --no-cache-dir email-validator
 
 # Copy certs directory
 COPY certs /app/certs
 
-RUN pip install -e .[dev]
+# Verify all dependencies are installed
+RUN pip check
 
 # Create necessary directories
 RUN mkdir -p /app/logs /app/data

@@ -183,6 +183,24 @@ def upgrade() -> None:
     op.create_index('ix_proxy_sessions_id', 'proxy_sessions', ['id'], unique=False)
     op.create_index('ix_proxy_sessions_name', 'proxy_sessions', ['name'], unique=False)
 
+    # Create interception_rules table
+    op.create_table(
+        'interception_rules',
+        sa.Column('id', sa.Integer(), nullable=False),
+        sa.Column('name', sa.String(), nullable=False),
+        sa.Column('enabled', sa.Boolean(), default=True),
+        sa.Column('session_id', sa.Integer(), nullable=False),
+        sa.Column('conditions', sqlite.JSON(), nullable=False),  # List of {field, operator, value, use_regex}
+        sa.Column('action', sa.String(), nullable=False),  # FORWARD, BLOCK, MODIFY
+        sa.Column('modification', sqlite.JSON(), nullable=True),  # Headers/body modifications
+        sa.Column('priority', sa.Integer(), nullable=False),
+        sa.Column('created_at', sa.DateTime(), server_default=sa.text('CURRENT_TIMESTAMP')),
+        sa.Column('updated_at', sa.DateTime(), server_default=sa.text('CURRENT_TIMESTAMP')),
+        sa.ForeignKeyConstraint(['session_id'], ['proxy_sessions.id'], ),
+        sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index('ix_interception_rules_session_id', 'interception_rules', ['session_id'], unique=False)
+
     # Create proxy_history table
     op.create_table(
         'proxy_history',
@@ -195,11 +213,15 @@ def upgrade() -> None:
         sa.Column('response_status', sa.Integer(), nullable=True),
         sa.Column('response_headers', sqlite.JSON(), nullable=True),
         sa.Column('response_body', sa.Text(), nullable=True),
-        sa.Column('duration', sa.Float(), nullable=True),
-        sa.Column('tags', sqlite.JSON(), nullable=True),
+        sa.Column('duration', sa.Float(), nullable=True),  # Request duration in seconds
+        sa.Column('tags', sqlite.JSON(), nullable=True),  # List of tags
         sa.Column('notes', sa.Text(), nullable=True),
         sa.Column('is_intercepted', sa.Boolean(), nullable=True),
         sa.Column('session_id', sa.Integer(), nullable=True),
+        sa.Column('applied_rules', sqlite.JSON(), nullable=True),  # List of {rule_id, action, modifications}
+        sa.Column('tls_version', sa.String(), nullable=True),  # TLS version (e.g., "TLSv1.3")
+        sa.Column('cipher_suite', sa.String(), nullable=True),  # Cipher suite used
+        sa.Column('certificate_info', sqlite.JSON(), nullable=True),  # Certificate details
         sa.ForeignKeyConstraint(['session_id'], ['proxy_sessions.id'], ),
         sa.PrimaryKeyConstraint('id')
     )
@@ -226,6 +248,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_table('proxy_analysis_results')
     op.drop_table('proxy_history')
+    op.drop_table('interception_rules')
     op.drop_table('proxy_sessions')
     op.drop_table('vulnerability_results')
     op.drop_table('vulnerability_scans')

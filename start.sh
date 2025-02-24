@@ -35,28 +35,6 @@ setup_certs_directory() {
     fi
 }
 
-# Function to wait for service readiness
-wait_for_service() {
-    local host=$1
-    local port=$2
-    local service=$3
-    local max_attempts=30
-    local attempt=1
-
-    echo "⏳ Waiting for $service to be ready..."
-    while ! nc -z $host $port >/dev/null 2>&1; do
-        if [ $attempt -eq $max_attempts ]; then
-            echo "❌ $service failed to start after $max_attempts attempts"
-            return 1
-        fi
-        sleep 2
-        let attempt++
-        echo -n "."
-    done
-    echo "✅ $service is ready"
-    return 0
-}
-
 # Main script
 echo "🚀 Starting Anarchy Copilot..."
 
@@ -69,9 +47,6 @@ setup_certs_directory
 # Build and start the containers
 echo "🔨 Building and starting containers..."
 docker-compose up --build -d
-
-# Wait for core services to be ready
-wait_for_service localhost 8000 "Backend API" || exit 1
 
 # Verify all services are running
 if ! docker-compose ps | grep -q "Up"; then

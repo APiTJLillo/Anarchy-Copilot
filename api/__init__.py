@@ -2,7 +2,7 @@
 FastAPI application initialization and configuration.
 """
 
-__version__ = "0.1.0"
+from version import __version__
 
 import logging
 from typing import Dict, Any, Optional
@@ -16,44 +16,46 @@ logger = logging.getLogger(__name__)
 _app_config: Dict[str, Any] = {}
 
 def create_app(config: Optional[Dict[str, Any]] = None) -> FastAPI:
-    """Create and configure the FastAPI application.
+    """Create and configure the FastAPI application."""
+    from .config import Settings
     
-    Args:
-        config: Optional configuration dictionary
-    
-    Returns:
-        Configured FastAPI application instance
-    """
+    # Import version info at runtime to avoid circular imports
+    version = config.get("version", __version__) if config else __version__
+
+    # Initialize settings with environment variables
+    settings = Settings()
+
+    # Store settings globally
     global _app_config
-    
-    if config:
-        _app_config.update(config)
+    _app_config.update(settings.model_dump())
 
-    # Set up FastAPI with configuration
-    default_config = {
-        "title": "Anarchy Copilot API",
-        "description": "API for managing bug bounty operations",
-        "version": "0.1.0",
-        "debug": False,
-        "cors_origins": ["http://localhost:3000"]
-    }
-
+    # Apply any override config and store globally
     if config:
-        default_config.update(config)
+        settings_dict = dict(config)
+        for key, value in settings_dict.items():
+            if key == "cors_origins":
+                # Update input instead of computed property
+                settings.cors_origins_input = ",".join(value if isinstance(value, list) else [value])
+            elif hasattr(settings, key):
+                setattr(settings, key, value)
+        # Update global config after modifying settings
+        _app_config.update(settings.model_dump())
 
     app = FastAPI(
-        title=default_config["title"],
-        description=default_config["description"],
-        version=default_config["version"],
-        debug=default_config["debug"]
+        title=settings.api_title,
+        description=f"API for managing bug bounty operations (Version {version})",
+        version=settings.api_version,
+        debug=settings.debug,
+        openapi_tags=[{"name": "version", "description": version}]
     )
 
-    logger.debug(f"Creating app with config: {default_config}")
+    logger.debug(f"Creating app with config: {_app_config}")
 
-    # Configure CORS
+    # Configure CORS middleware
+    logger.info(f"Configuring CORS with origins: {settings.cors_origins}")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=default_config["cors_origins"],
+        allow_origins=settings.cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -63,56 +65,65 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> FastAPI:
 
     logger.debug("CORS middleware configured")
 
-    # Add CORS and security headers handler
+    # Add security headers handler
     @app.middleware("http")
-    async def always_allow_origin(request, call_next):
+    async def add_security_headers(request, call_next):
         try:
-            # Get response and handle None case
-            response: Optional[Response] = None
-            try:
-                response = await call_next(request)
-            except Exception as e:
-                logger.error(f"Error in route handler: {e}")
-                return JSONResponse(
-                    status_code=500,
-                    content={"detail": f"Internal server error: {str(e)}"}
-                )
-
-            # Handle missing response
-            if not response:
-                return JSONResponse(
-                    status_code=500,
-                    content={"detail": "No response returned from handler"}
-                )
+            response = await call_next(request)
             
-            # Add security headers
             if isinstance(response, Response):
-                # Disable HTTPS enforcement headers
+                # Disable HTTPS enforcement headers for development
                 response.headers.update({
                     "strict-transport-security": "max-age=0",
                     "x-content-security-policy": "upgrade-insecure-requests 0",
                     "content-security-policy": "upgrade-insecure-requests 0"
                 })
-
+                
+                # Add CORS headers for preflight
+                if request.method == "OPTIONS":
+                    origin = request.headers.get("origin")
+                    if origin and origin in settings.cors_origins:
+                        response.headers.update({
+                            "access-control-allow-origin": origin,
+                            "access-control-allow-methods": "*",
+                            "access-control-allow-headers": "*",
+                            "access-control-allow-credentials": "true",
+                            "access-control-max-age": "600",
+                        })
+            
             return response
 
         except Exception as e:
-            # Handle unexpected middleware errors
-            logger.error(f"Unexpected middleware error: {e}")
+            logger.error(f"Middleware error: {e}")
             return JSONResponse(
                 status_code=500,
-                content={"detail": f"Middleware error: {str(e)}"}
+                content={"detail": str(e)}
             )
 
-    # Import and include the proxy router
+    # Import and include routers
     from .proxy.endpoints import router as proxy_router
+    from .health import router as health_router
+    
     app.include_router(proxy_router, prefix="/api/proxy")
+    app.include_router(health_router, prefix="/api", tags=["system"])
 
     @app.on_event("startup")
     async def startup_event():
         """Initialize resources on startup."""
-        # Initialize any required resources
-        pass
+        # Initialize proxy settings
+        settings = Settings()
+        try:
+            from proxy.server import proxy_server
+            proxy_server.configure({
+                'host': settings.proxy_host,
+                'port': settings.proxy_port,
+                'max_connections': settings.proxy_max_connections,
+                'max_keepalive_connections': settings.proxy_max_keepalive_connections,
+                'keepalive_timeout': settings.proxy_keepalive_timeout,
+            })
+            logger.info("Initialized proxy settings")
+        except Exception as e:
+            logger.error(f"Failed to initialize proxy settings: {e}")
 
     @app.on_event("shutdown")
     async def shutdown_event():
@@ -132,4 +143,4 @@ def get_config() -> Dict[str, Any]:
     """Get current application configuration."""
     return _app_config
 
-__all__ = ['create_app', 'get_config']
+__all__ = ['create_app', 'get_config', 'Settings']

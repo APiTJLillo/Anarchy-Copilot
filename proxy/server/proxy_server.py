@@ -6,8 +6,11 @@ import ssl
 import signal
 import os
 import psutil
+import sys
 import uvicorn
+from contextlib import AsyncExitStack
 from pathlib import Path
+from async_timeout import timeout as async_timeout
 from typing import Dict, List, Optional, Any, Tuple, Callable, TYPE_CHECKING
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -19,16 +22,21 @@ from ..config import ProxyConfig
 
 if TYPE_CHECKING:
     from api.proxy.database_models import ProxyHistoryEntry, ProxySession as DBProxySession
+
 from .custom_protocol import TunnelProtocol
+from .https_intercept_protocol import HttpsInterceptProtocol
 from ..interceptor import RequestInterceptor, ResponseInterceptor, InterceptedRequest, InterceptedResponse
 from ..encoding import ContentEncodingInterceptor
 from ..session import ProxySession
 from ..websocket import WebSocketManager, DebugInterceptor
 from ..analysis.analyzer import TrafficAnalyzer
 from .certificates import CertificateAuthority
+from .tls_helper import cert_manager, CertificateManager
 from .handlers import ProxyResponse
 
 logger = logging.getLogger("proxy.core")
+
+_instance = None
 
 class ProxyServer:
     """Main proxy server implementation."""
@@ -36,8 +44,8 @@ class ProxyServer:
     def __init__(self, config: ProxyConfig, add_default_interceptors: bool = False):
         """Initialize the proxy server."""
         self.config = config
-        self._host = config.host or "127.0.0.1"
-        self._port = config.port or 8080
+        self._host = config.host
+        self._port = config.port
         self.session = ProxySession(max_history=config.history_size)
         self._request_interceptors: List[RequestInterceptor] = []
         self._response_interceptors: List[ResponseInterceptor] = []
@@ -63,18 +71,52 @@ class ProxyServer:
         self._pending_requests: Dict[str, Any] = {}
         self._pending_responses: Dict[str, Any] = {}
 
+        # Initialize CA
+        self._ca = None
         try:
             if config.ca_cert_path and config.ca_key_path:
-                self._ca = CertificateAuthority(
-                    config.ca_cert_path,
-                    config.ca_key_path
-                )
+                try:
+                    # Initialize CA
+                    self._ca = CertificateAuthority(
+                        config.ca_cert_path,
+                        config.ca_key_path
+                    )
+                    # Configure cert manager with CA
+                    cert_manager.set_ca(self._ca)
+                    logger.info("Certificate Authority initialized successfully")
+                except Exception as e:
+                    logger.warning(f"Certificate Authority initialization failed: {e}")
+                    logger.warning("Proxy will run without HTTPS interception capability")
+                    self._ca = None
             else:
-                self._ca = None
+                logger.info("No CA configuration provided - running without HTTPS interception")
         except Exception as e:
-            logger.warning(f"Certificate Authority initialization failed: {e}")
-            logger.warning("Proxy will run without HTTPS interception capability")
-            self._ca = None
+            logger.error(f"Error during initialization: {e}")
+            raise
+
+    @classmethod
+    def get_instance(cls) -> Optional['ProxyServer']:
+        """Get the global proxy server instance."""
+        return _instance
+
+    @classmethod
+    def configure(cls, config_dict: dict) -> None:
+        """Configure or reconfigure the proxy server instance."""
+        global _instance
+
+        config = ProxyConfig.from_dict(config_dict)
+        
+        if _instance is None:
+            _instance = cls(config)
+            logger.info("Created new proxy server instance with config: %s", config_dict)
+        else:
+            # Update existing instance
+            _instance.config.update(config_dict)
+            # Update key attributes
+            _instance._host = config.host
+            _instance._port = config.port
+            _instance.session.max_history = config.history_size
+            logger.info("Updated existing proxy server instance with config: %s", config_dict)
 
     @property
     def is_running(self) -> bool:
@@ -165,23 +207,21 @@ class ProxyServer:
             self._host = host
 
         # Initialize database
-        # Initialize database connection
         try:
             logger.info("Initializing database connection...")
             async with AsyncSessionLocal() as session:
-                # First check if proxy_history table exists
                 # First check if tables exist
                 result = await session.execute(
                     text("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='proxy_history'")
                 )
-                tables_count = result.scalar()  # Not awaited - returns directly
+                tables_count = result.scalar()
                 if not tables_count:
                     logger.error("Database tables not found - migrations may not have been run")
                     raise RuntimeError("Database tables not found - please run migrations first")
 
-                # Now test querying the table
+                # Test querying the table
                 result = await session.execute(text("SELECT COUNT(*) FROM proxy_history"))
-                count = result.scalar()  # Not awaited - returns directly
+                count = result.scalar()
                 logger.info("Database connection test successful - found %d history entries", count)
             self._db_initialized = True
             logger.info("Database initialization completed")
@@ -203,23 +243,13 @@ class ProxyServer:
                 server_header=False,
                 proxy_headers=False,
                 forwarded_allow_ips='*',
-                http=TunnelProtocol,
-                timeout_keep_alive=30,
+                http=TunnelProtocol if not self._ca else HttpsInterceptProtocol.create_protocol_factory(),
+                timeout_keep_alive=30,  # Fixed timeout for better tunnel stability
                 timeout_notify=1,
                 timeout_graceful_shutdown=3,
                 access_log=False,
                 use_colors=False
             )
-
-            # Kill parent process first if it exists
-            parent = psutil.Process(os.getppid())
-            if any(conn.laddr.port == self._port for conn in parent.connections()):
-                logger.warning("Found parent process using port, terminating")
-                parent.terminate()
-                await asyncio.sleep(1)
-
-            # Clean up the port
-            await self._force_cleanup_port()
 
             # Create and start server
             try:
@@ -270,9 +300,14 @@ class ProxyServer:
                     # Signal shutdown
                     self._server.should_exit = True
                     
-                    # Add timeout for shutdown
-                    try:
-                        async with asyncio.timeout(3.0):  # 3 second timeout
+                    # Version-compatible timeout handling
+                    async with AsyncExitStack() as stack:
+                        try:
+                            if sys.version_info >= (3, 11):
+                                await stack.enter_async_context(asyncio.timeout(3.0))
+                            else:
+                                await stack.enter_async_context(async_timeout(3.0))
+
                             # Force close any remaining connections
                             if hasattr(self._server, 'servers'):
                                 for server in self._server.servers:
@@ -281,11 +316,11 @@ class ProxyServer:
 
                             # Final shutdown
                             await self._server.shutdown()
-                    except asyncio.TimeoutError:
-                        logger.warning("Server shutdown timed out, forcing cleanup")
-                        if hasattr(self._server, 'servers'):
-                            for server in self._server.servers:
-                                server.abort()
+                        except asyncio.TimeoutError:
+                            logger.warning("Server shutdown timed out, forcing cleanup")
+                            if hasattr(self._server, 'servers'):
+                                for server in self._server.servers:
+                                    server.abort()
                 except Exception as e:
                     logger.warning(f"Error during server shutdown: {e}")
                 finally:
@@ -311,21 +346,6 @@ class ProxyServer:
         """Get the traffic analyzer instance."""
         return self._analyzer if self._is_running else None
 
-    def _extract_request_info(self, scope: dict) -> Tuple[str, str, Optional[str]]:
-        """Extract method, host and path from ASGI scope."""
-        method = scope.get("method", "").upper()
-        
-        # Get headers from raw bytes
-        headers = dict(scope.get("headers", []))
-        host = headers.get(b"host", b"").decode()
-        
-        # Get path, ensuring it starts with /
-        path = scope.get("path", "")
-        if not path.startswith("/"):
-            path = "/" + path
-            
-        return method, host, path
-
     async def handle_request(self, scope: dict, receive: Callable, send: Callable) -> Optional[ProxyResponse]:
         """Handle an incoming request."""
         start_time = datetime.utcnow()
@@ -338,30 +358,11 @@ class ProxyServer:
             )
 
         method = scope.get("method", "")
-
         # Skip if this is a CONNECT request - let ASGIHandler route it
         if method == "CONNECT":
             return None
 
         try:
-            # Process regular HTTP request
-            logger.debug(f"ProxyServer handling HTTP {method} request")
-            
-            # Get active session from database
-            async with AsyncSessionLocal() as db:
-                try:
-                    result = await db.execute(
-                        text("SELECT * FROM proxy_sessions WHERE is_active = true ORDER BY start_time DESC LIMIT 1")
-                    )
-                    active_session = result.first()  # Not awaited - returns directly
-                    if active_session:
-                        logger.debug(f"Found active session: {active_session.id}")
-                    else:
-                        logger.warning("No active proxy session found")
-                except Exception as e:
-                    logger.error("Error querying active session: %s", str(e), exc_info=True)
-                    active_session = None
-
             # Extract info for regular HTTP request
             method, host, path = self._extract_request_info(scope)
             if not host:
@@ -369,6 +370,21 @@ class ProxyServer:
                     status_code=400,
                     headers={'Content-Type': 'text/plain'},
                     body=b'Missing Host header'
+                )
+
+            # Check host restrictions if configured
+            if self.config.allowed_hosts and host not in self.config.allowed_hosts:
+                return ProxyResponse(
+                    status_code=403,
+                    headers={'Content-Type': 'text/plain'},
+                    body=b'Host not allowed'
+                )
+            
+            if self.config.excluded_hosts and host in self.config.excluded_hosts:
+                return ProxyResponse(
+                    status_code=403,
+                    headers={'Content-Type': 'text/plain'},
+                    body=b'Host is excluded'
                 )
 
             request_id = str(uuid4())
@@ -386,10 +402,12 @@ class ProxyServer:
             self._pending_requests[request_id] = request
 
             try:
-                for interceptor in self._request_interceptors:
-                    request = await interceptor.intercept(request)
+                # Apply request interceptors if enabled
+                if self.config.intercept_requests:
+                    for interceptor in self._request_interceptors:
+                        request = await interceptor.intercept(request)
 
-                # Forward regular HTTP request
+                # Forward request
                 async with self.session.request(request) as aiohttp_response:
                     response_body = await aiohttp_response.read()
                     
@@ -400,48 +418,44 @@ class ProxyServer:
                         body=response_body
                     )
 
-                    # Run response interceptors
-                    for interceptor in self._response_interceptors:
-                        response = await interceptor.intercept(response, request)
-                    
-                    # Store request/response in database if we have an active session
-                    if active_session:
-                        end_time = datetime.utcnow()
-                        duration = (end_time - start_time).total_seconds()
-                        
-                        try:
-                            # Import here to avoid circular import
-                            from api.proxy.database_models import ProxyHistoryEntry
-                            
-                            history_entry = ProxyHistoryEntry(
-                                session_id=active_session.id,
-                                timestamp=start_time,  # Use the captured start time
-                                method=request.method,
-                                url=request.url,
-                                request_headers=request.headers,
-                                request_body=request.body.decode('utf-8', errors='ignore') if request.body else None,
-                                response_status=response.status_code,
-                                response_headers=response.headers,
-                                response_body=response.body.decode('utf-8', errors='ignore') if response.body else None,
-                                duration=duration,
-                                is_intercepted=bool(self._request_interceptors or self._response_interceptors),
-                                tags=[],
-                                notes=None
+                    # Apply response interceptors if enabled
+                    if self.config.intercept_responses:
+                        for interceptor in self._response_interceptors:
+                            response = await interceptor.intercept(response, request)
+
+                    # Store history in database if we have an active session
+                    try:
+                        async with AsyncSessionLocal() as db:
+                            result = await db.execute(
+                                text("SELECT * FROM proxy_sessions WHERE is_active = true ORDER BY start_time DESC LIMIT 1")
                             )
-                            
-                            logger.debug(f"Saving history entry: method={request.method} url={request.url}")
-                            async with AsyncSessionLocal() as db:
-                                try:
-                                    await db.begin()
-                                    db.add(history_entry)
-                                    await db.commit()
-                                    logger.debug("Successfully saved history entry")
-                                except Exception as db_error:
-                                    logger.error(f"Database error while saving history: {db_error}")
-                                    await db.rollback()
-                                    raise
-                        except Exception as e:
-                            logger.error(f"Failed to store proxy history: {e}", exc_info=True)
+                            active_session = result.first()
+                            if active_session:
+                                from api.proxy.database_models import ProxyHistoryEntry
+                                
+                                end_time = datetime.utcnow()
+                                duration = (end_time - start_time).total_seconds()
+                                
+                                history_entry = ProxyHistoryEntry(
+                                    session_id=active_session.id,
+                                    timestamp=start_time,
+                                    method=request.method,
+                                    url=request.url,
+                                    request_headers=request.headers,
+                                    request_body=request.body.decode('utf-8', errors='ignore') if request.body else None,
+                                    response_status=response.status_code,
+                                    response_headers=response.headers,
+                                    response_body=response.body.hex() if response.body else None,
+                                    duration=duration,
+                                    is_intercepted=bool(self._request_interceptors or self._response_interceptors),
+                                    tags=[],
+                                    notes=None
+                                )
+                                
+                                db.add(history_entry)
+                                await db.commit()
+                    except Exception as e:
+                        logger.error(f"Failed to store proxy history: {e}", exc_info=True)
                     
                     # Send response through ASGI
                     return ProxyResponse(
@@ -462,3 +476,18 @@ class ProxyServer:
                 headers={'Content-Type': 'text/plain'},
                 body=str(e).encode()
             )
+
+    def _extract_request_info(self, scope: dict) -> Tuple[str, str, Optional[str]]:
+        """Extract method, host and path from ASGI scope."""
+        method = scope.get("method", "").upper()
+        
+        # Get headers from raw bytes
+        headers = dict(scope.get("headers", []))
+        host = headers.get(b"host", b"").decode()
+        
+        # Get path, ensuring it starts with /
+        path = scope.get("path", "")
+        if not path.startswith("/"):
+            path = "/" + path
+            
+        return method, host, path

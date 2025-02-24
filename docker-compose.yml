@@ -25,9 +25,7 @@ services:
       - .:/app
       - ~/.nuclei:/root/.nuclei
       - dev-cache:/root/.cache
-    ports:
-      - "8000:8000" # API
-      - "5678:5678" # Debug
+    network_mode: "host" # Allow direct access from browser
     environment:
       - PYTHONPATH=/app:/app/anarchy-copilot
       - PYTEST_ADDOPTS="-v --import-mode=append"
@@ -35,10 +33,21 @@ services:
       - PYTHONDONTWRITEBYTECODE=1
       - PYTHONUNBUFFERED=1
       - DISABLE_HTTPS=0
+      # API Settings
+      - ANARCHY_API_TITLE=Anarchy Copilot API
+      - ANARCHY_API_VERSION=0.1.0
+      - ANARCHY_DEBUG=true
+      - ANARCHY_CORS_ORIGINS=http://localhost:3000
+      # Proxy Settings
+      - ANARCHY_PROXY_HOST=0.0.0.0
+      - ANARCHY_PROXY_PORT=8080
+      - ANARCHY_PROXY_INTERCEPT_REQUESTS=true
+      - ANARCHY_PROXY_INTERCEPT_RESPONSES=true
+      - ANARCHY_PROXY_MAX_CONNECTIONS=100
+      - ANARCHY_PROXY_MAX_KEEPALIVE_CONNECTIONS=20
+      - ANARCHY_PROXY_KEEPALIVE_TIMEOUT=30
     env_file:
       - .env
-    networks:
-      - anarchy
     command: [ "/usr/local/bin/dev-entrypoint.sh", "start" ]
     healthcheck:
       test: [ "CMD", "/usr/local/bin/healthcheck.sh" ]
@@ -57,32 +66,30 @@ services:
       - proxy-data:/app/data
     environment:
       - PYTHONPATH=/app:/app/anarchy-copilot
-      - PROXY_HOST=0.0.0.0
-      - PROXY_PORT=8080
-      - CA_CERT_PATH=/app/certs/ca.crt
-      - CA_KEY_PATH=/app/certs/ca.key
       - PYTHONDONTWRITEBYTECODE=1
       - PYTHONUNBUFFERED=1
+      # API Settings
+      - ANARCHY_API_TITLE=Anarchy Copilot API
+      - ANARCHY_API_VERSION=0.1.0
+      - ANARCHY_DEBUG=true
+      - ANARCHY_CORS_ORIGINS=http://localhost:3000
+      # Proxy Settings
+      - ANARCHY_PROXY_HOST=0.0.0.0
+      - ANARCHY_PROXY_PORT=8080
+      - ANARCHY_PROXY_INTERCEPT_REQUESTS=true
+      - ANARCHY_PROXY_INTERCEPT_RESPONSES=true
+      - ANARCHY_PROXY_MAX_CONNECTIONS=100
+      - ANARCHY_PROXY_MAX_KEEPALIVE_CONNECTIONS=20
+      - ANARCHY_PROXY_KEEPALIVE_TIMEOUT=30
+      # Certificate Settings
+      - CA_CERT_PATH=/app/certs/ca.crt
+      - CA_KEY_PATH=/app/certs/ca.key
     network_mode: "host" # Allow direct external connections for proxy traffic
     dns:
       - 8.8.8.8 # Use Google's DNS
       - 1.1.1.1 # Use Cloudflare's DNS as backup
     command: >
-      sh -c "
-        # Skip migrations for proxy container
-        exec python -m debugpy --listen 0.0.0.0:5679 \
-            -m uvicorn proxy.core:app \
-            --host 0.0.0.0 \
-            --port 8080 \
-            --reload \
-            --reload-delay 2 \
-            --log-level debug \
-            --proxy-headers \
-            --timeout-keep-alive 75 \
-            --forwarded-allow-ips='*' \
-            --lifespan on \
-            --use-colors
-      "
+      python -m debugpy --listen 0.0.0.0:5679 -m uvicorn proxy.core:app --host 0.0.0.0 --port 8080 --reload --reload-delay 2 --log-level debug --proxy-headers --timeout-keep-alive 75 --forwarded-allow-ips '*' --lifespan on --use-colors
 
   frontend:
     build:
@@ -91,20 +98,18 @@ services:
     volumes:
       - ./frontend:/app
       - frontend-node-modules:/app/node_modules
-    ports:
-      - "3000:3000"
+    network_mode: "host" # Allow direct browser access
     environment:
       - NODE_ENV=development
-      - REACT_APP_API_BASE_URL=http://dev:8000 # Use Docker DNS resolution
-      - REACT_APP_PROXY_URL=http://localhost:8080 # Connect to proxy on host network
+      - REACT_APP_API_BASE_URL=http://localhost:8000
+      - REACT_APP_PROXY_URL=http://localhost:8080
+      - PORT=3000 # Set explicit port for React dev server
       - WDS_SOCKET_PORT=3000
     depends_on:
       dev:
         condition: service_healthy
       proxy:
         condition: service_started
-    networks:
-      - anarchy
     healthcheck:
       test: [ "CMD", "wget", "--spider", "-q", "http://localhost:3000" ]
       interval: 10s

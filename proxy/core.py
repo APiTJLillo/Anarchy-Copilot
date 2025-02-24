@@ -29,6 +29,24 @@ logging.basicConfig(
 logger = logging.getLogger("proxy.core")
 logger.setLevel(logging.DEBUG)
 
+# Configure CORS middleware settings
+def configure_cors(app: FastAPI) -> None:
+    """Configure CORS middleware for an application."""
+    origins = os.getenv("ANARCHY_CORS_ORIGINS", "http://localhost:3000")
+    if isinstance(origins, str):
+        origins = [origin.strip() for origin in origins.split(",") if origin.strip()]
+
+    from fastapi.middleware.cors import CORSMiddleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["*"],
+        max_age=600,
+    )
+
 # Create FastAPI apps
 app = FastAPI(
     title="Anarchy Copilot Proxy",
@@ -45,6 +63,10 @@ api_router = FastAPI(
     redoc_url="/redoc",
     openapi_url="/openapi.json"
 )
+
+# Configure CORS for both apps
+configure_cors(app)
+configure_cors(api_router)
 
 # Mount API router
 app.mount("/api", api_router)

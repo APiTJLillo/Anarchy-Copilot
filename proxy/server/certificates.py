@@ -24,6 +24,8 @@ class CertificateAuthority:
         self.ca_cert_path = ca_cert_path
         self.ca_key_path = ca_key_path
         self._cert_cache = {}
+        self._cert_cache_dir = Path(tempfile.gettempdir()) / "proxy_certs"
+        self._cert_cache_dir.mkdir(exist_ok=True)
         
         # Load CA cert and key
         try:
@@ -35,6 +37,13 @@ class CertificateAuthority:
                     f.read(),
                     password=None
                 )
+            
+            # Validate CA certificate
+            if not isinstance(self.ca_key, rsa.RSAPrivateKey):
+                raise ValueError("CA key must be an RSA private key")
+            
+            if self.ca_cert.not_valid_after < datetime.utcnow():
+                raise ValueError("CA certificate has expired")
                 
         except Exception as e:
             logger.error(f"Failed to load CA certificate/key: {e}")
@@ -50,44 +59,97 @@ class CertificateAuthority:
             Tuple of (cert_path, key_path)
         """
         if hostname in self._cert_cache:
-            return self._cert_cache[hostname]
-
-        # Generate new certificate
+            cert_path, key_path = self._cert_cache[hostname]
+            # Validate cached cert still exists and is valid
+            try:
+                with open(cert_path, 'rb') as f:
+                    cert = x509.load_pem_x509_certificate(f.read())
+                    if cert.not_valid_after > datetime.utcnow():
+                        return cert_path, key_path
+            except:
+                pass  # Generate new cert if validation fails
+            
+        # Generate new private key with modern defaults
         key = rsa.generate_private_key(
             public_exponent=65537,
-            key_size=2048
+            key_size=2048,  # Minimum recommended size
         )
 
-        # Create certificate
+        # Create certificate with modern defaults
         subject = x509.Name([
-            x509.NameAttribute(NameOID.COMMON_NAME, hostname)
+            x509.NameAttribute(NameOID.COMMON_NAME, hostname),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "MITM Proxy"),
+            x509.NameAttribute(NameOID.ORGANIZATIONAL_UNIT_NAME, "HTTPS Intercept")
         ])
 
-        cert = x509.CertificateBuilder().subject_name(
-            subject
-        ).issuer_name(
-            self.ca_cert.subject
-        ).public_key(
-            key.public_key()
-        ).serial_number(
-            x509.random_serial_number()
-        ).not_valid_before(
-            datetime.utcnow()
-        ).not_valid_after(
-            datetime.utcnow() + timedelta(days=365)
-        ).add_extension(
+        # Build certificate with recommended extensions
+        builder = x509.CertificateBuilder()
+        builder = builder.subject_name(subject)
+        builder = builder.issuer_name(self.ca_cert.subject)
+        builder = builder.public_key(key.public_key())
+        builder = builder.serial_number(x509.random_serial_number())
+        
+        # Set validity period (shorter than CA cert)
+        builder = builder.not_valid_before(datetime.utcnow())
+        builder = builder.not_valid_after(
+            datetime.utcnow() + timedelta(days=90)  # 90 days is a common choice for short-lived certs
+        )
+        
+        # Add recommended extensions
+        builder = builder.add_extension(
             x509.SubjectAlternativeName([x509.DNSName(hostname)]),
             critical=False
-        ).sign(self.ca_key, hashes.SHA256())
+        )
+        
+        # Modern extensions for security
+        builder = builder.add_extension(
+            x509.BasicConstraints(ca=False, path_length=None),
+            critical=True
+        )
+        
+        builder = builder.add_extension(
+            x509.KeyUsage(
+                digital_signature=True,
+                content_commitment=False,
+                key_encipherment=True,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=False,
+                crl_sign=False,
+                encipher_only=False,
+                decipher_only=False
+            ),
+            critical=True
+        )
+        
+        builder = builder.add_extension(
+            x509.ExtendedKeyUsage([
+                x509.oid.ExtendedKeyUsageOID.SERVER_AUTH,
+                x509.oid.ExtendedKeyUsageOID.CLIENT_AUTH
+            ]),
+            critical=False
+        )
+        
+        # Sign certificate
+        cert = builder.sign(
+            private_key=self.ca_key,
+            algorithm=hashes.SHA256()
+        )
 
-        # Save to temp files
-        cert_path = os.path.join(tempfile.gettempdir(), f"{hostname}.crt")
-        key_path = os.path.join(tempfile.gettempdir(), f"{hostname}.key")
+        # Save to cache directory with hostname-based unique names
+        cert_path = str(self._cert_cache_dir / f"{hostname}_{datetime.utcnow().strftime('%Y%m%d')}.crt")
+        key_path = str(self._cert_cache_dir / f"{hostname}_{datetime.utcnow().strftime('%Y%m%d')}.key")
 
+        # Save certificate with proper permissions
         with open(cert_path, "wb") as f:
-            f.write(cert.public_bytes(serialization.Encoding.PEM))
+            os.chmod(cert_path, 0o644)  # Read by owner, read by others
+            f.write(cert.public_bytes(
+                encoding=serialization.Encoding.PEM
+            ))
 
+        # Save private key with restricted permissions
         with open(key_path, "wb") as f:
+            os.chmod(key_path, 0o600)  # Read/write by owner only
             f.write(key.private_bytes(
                 encoding=serialization.Encoding.PEM,
                 format=serialization.PrivateFormat.PKCS8,
@@ -96,3 +158,28 @@ class CertificateAuthority:
 
         self._cert_cache[hostname] = (cert_path, key_path)
         return cert_path, key_path
+
+    def cleanup_old_certs(self, max_age_days: int = 7) -> None:
+        """Clean up expired certificates from the cache directory."""
+        try:
+            cutoff = datetime.utcnow() - timedelta(days=max_age_days)
+            for cert_file in self._cert_cache_dir.glob("*.crt"):
+                if cert_file.stat().st_mtime < cutoff.timestamp():
+                    try:
+                        cert_file.unlink()
+                        key_file = self._cert_cache_dir / (cert_file.stem + ".key")
+                        if key_file.exists():
+                            key_file.unlink()
+                    except Exception as e:
+                        logger.warning(f"Failed to remove old cert {cert_file}: {e}")
+        except Exception as e:
+            logger.error(f"Error cleaning up old certificates: {e}")
+
+    def __del__(self):
+        """Cleanup when the CA is destroyed."""
+        try:
+            self.cleanup_old_certs(max_age_days=0)  # Remove all cached certs
+            if self._cert_cache_dir.exists():
+                self._cert_cache_dir.rmdir()  # Remove directory if empty
+        except:
+            pass  # Ignore cleanup errors on shutdown

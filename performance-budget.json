@@ -1,0 +1,133 @@
+{
+    "version": "1.0",
+    "description": "Performance budget for type suggestion system",
+    "processing_speed": {
+        "suggestions_per_second": {
+            "min": 100,
+            "target": 500,
+            "max_regression": -10
+        }
+    },
+    "memory": {
+        "peak_mb": {
+            "max": 512,
+            "warning": 384,
+            "max_increase": 20
+        },
+        "baseline_mb": {
+            "max": 128
+        }
+    },
+    "type_quality": {
+        "specificity_ratio": {
+            "min": 0.7,
+            "target": 0.9
+        },
+        "any_type_ratio": {
+            "max": 0.2,
+            "warning": 0.15
+        }
+    },
+    "scaling": {
+        "large_file_processing_seconds": {
+            "max": 30,
+            "warning": 20
+        },
+        "linear_scaling_threshold": {
+            "max_deviation": 15,
+            "measurement_points": [
+                "small",
+                "medium",
+                "large"
+            ]
+        }
+    },
+    "resource_usage": {
+        "cpu_usage_percent": {
+            "max": 80,
+            "warning": 70
+        },
+        "io_operations": {
+            "max_per_second": 1000
+        }
+    },
+    "feature_performance": {
+        "functions": {
+            "max_processing_ms": 100
+        },
+        "classes": {
+            "max_processing_ms": 150
+        },
+        "variables": {
+            "max_processing_ms": 50
+        },
+        "imports": {
+            "max_processing_ms": 30
+        }
+    },
+    "thresholds": {
+        "regression_notification": {
+            "speed": -5,
+            "memory": 10,
+            "quality": -5
+        },
+        "regression_failure": {
+            "speed": -10,
+            "memory": 20,
+            "quality": -10
+        }
+    },
+    "monitoring": {
+        "historical_window_days": 30,
+        "min_samples": 5,
+        "trend_analysis": {
+            "window_size": 7,
+            "deviation_threshold": 2.0
+        }
+    },
+    "alerts": {
+        "notification_channels": [
+            "github_comment",
+            "workflow_annotation"
+        ],
+        "thresholds": {
+            "critical": {
+                "speed_regression": -15,
+                "memory_increase": 25,
+                "quality_decrease": -15
+            },
+            "warning": {
+                "speed_regression": -8,
+                "memory_increase": 15,
+                "quality_decrease": -8
+            }
+        }
+    },
+    "reporting": {
+        "metrics": [
+            "suggestions_per_second",
+            "peak_memory_mb",
+            "specificity_ratio",
+            "any_type_ratio",
+            "processing_time_by_size",
+            "processing_time_by_feature"
+        ],
+        "trend_indicators": [
+            "week_over_week",
+            "month_over_month"
+        ],
+        "visualization": {
+            "charts": [
+                "performance_trend",
+                "memory_usage",
+                "quality_metrics",
+                "scaling_analysis"
+            ],
+            "annotations": [
+                "regressions",
+                "improvements",
+                "thresholds"
+            ]
+        }
+    }
+}

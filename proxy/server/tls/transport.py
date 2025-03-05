@@ -15,14 +15,23 @@ logger = logging.getLogger("proxy.core")
 @dataclass
 class BufferConfig:
     """Configuration for transport buffering."""
-    chunk_size: int = 32 * 1024  # 32KB chunks
-    max_buffer_size: int = 1024 * 1024  # 1MB total buffer
-    write_buffer_size: int = 256 * 1024  # 256KB write buffer
-    high_water_mark: float = 0.8  # 80% of buffer size
-    low_water_mark: float = 0.2  # 20% of buffer size
-    max_buffer_chunks: int = 1000  # Maximum number of pending chunks
-    max_retry_attempts: int = 3  # Maximum write retry attempts
-    retry_delay: float = 0.1  # Delay between retries in seconds
+    chunk_size: int = 64 * 1024  # Increased to 64KB chunks
+    max_buffer_size: int = 2 * 1024 * 1024  # Increased to 2MB total buffer
+    write_buffer_size: int = 512 * 1024  # Increased to 512KB write buffer
+    high_water_mark: float = 0.9  # Increased to 90% of buffer size
+    low_water_mark: float = 0.3  # Increased to 30% of buffer size
+    max_buffer_chunks: int = 2000  # Increased maximum number of pending chunks
+    max_retry_attempts: int = 5  # Increased maximum write retry attempts
+    retry_delay: float = 0.2  # Increased delay between retries
+    
+    def __post_init__(self):
+        """Validate configuration."""
+        if self.chunk_size <= 0:
+            raise ValueError("chunk_size must be positive")
+        if self.max_buffer_size < self.chunk_size:
+            raise ValueError("max_buffer_size must be >= chunk_size")
+        if not (0 < self.low_water_mark < self.high_water_mark < 1):
+            raise ValueError("Invalid water mark values")
 
 @dataclass
 class TransportMetrics:

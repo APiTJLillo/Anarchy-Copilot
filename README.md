@@ -8,7 +8,6 @@ AI-powered bug bounty suite that integrates modern technologies to streamline th
 - **Local Proxy Checkbox**: A UI checkbox to enable the local proxy, which only activates when the Docker proxy is running.
 - **Proxy Settings Endpoint**: A new `/settings` endpoint to provide current proxy settings to the client.
 
-
 ### Reconnaissance Module ✅
 - Automated subdomain discovery
 - Port scanning and service detection
@@ -37,6 +36,15 @@ AI-powered bug bounty suite that integrates modern technologies to streamline th
   - Automated vulnerability verification
   - Advanced false positive reduction with ML
   - JavaScript deobfuscation and analysis
+
+- **AI & Language Features** ✨:
+  - Natural language generation for clear explanations
+  - Language model integration for enhanced analysis
+  - Semantic analysis of responses and contexts
+  - Cross-lingual support with neural translation
+  - Cultural context awareness and adaptation
+  - Advanced validation and quality checks
+  - Learning capabilities for continuous improvement
 
 - **Performance & Scale**:
   - Efficient traffic handling and connection pooling
@@ -121,6 +129,13 @@ The application uses environment variables for configuration. Default values are
 - `ANARCHY_PROXY_INTERCEPT_RESPONSES` - Enable response interception
 - `ANARCHY_PROXY_MAX_CONNECTIONS` - Maximum concurrent connections
 
+### AI & Language Settings
+- `ANARCHY_LLM_MODEL` - Language model selection
+- `ANARCHY_LLM_API_KEY` - API key for language model
+- `ANARCHY_TRANSLATION_MODEL` - Translation model selection
+- `ANARCHY_SEMANTIC_CACHE` - Enable semantic caching
+- `ANARCHY_CULTURAL_DB` - Path to cultural context database
+
 ### Certificate Settings
 - `CA_CERT_PATH` - Path to CA certificate
 - `CA_KEY_PATH` - Path to CA private key
@@ -148,6 +163,12 @@ anarchy-copilot/
 │   ├── scheduler.py     # Scheduling system
 │   └── tools/          # Scanner implementations
 ├── vuln_module/         # Vulnerability module
+├── ai_module/           # AI and language processing
+│   ├── nlg.py          # Natural language generation
+│   ├── llm.py          # Language model integration
+│   ├── semantic.py     # Semantic analysis
+│   ├── multilingual.py # Cross-lingual support
+│   └── cultural.py    # Cultural context handling
 │   ├── models.py       # Vulnerability models
 │   ├── vuln_manager.py # Vulnerability interface
 │   └── scanner/       # Scanner implementations
@@ -182,24 +203,15 @@ make test
 # Run specific test types
 make test-unit         # Unit tests
 make test-integration  # Integration tests
-make test-api         # API tests
-
-# View test reports
-open test-reports/report.html
+make test-ai          # AI/Language tests
 ```
 
 ### Test Categories
 - Unit tests (fast, no external dependencies)
 - Integration tests (external tool interactions)
 - API tests (endpoint testing)
-- Example tests (usage patterns)
+- AI/Language tests (NLG, LLM, semantic analysis)
 - Security tests (scanning & validation)
-
-### Test Reports
-- HTML test reports with coverage metrics
-- JUnit XML reports for CI integration
-- Performance profiling results
-- Security scan summaries
 
 For detailed testing information, see `tests/README.md`.
 
@@ -207,19 +219,10 @@ For detailed testing information, see `tests/README.md`.
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Set up development environment:
-   ```bash
-   make dev-setup
-   python -m tests.tools.validate_environment
-   ```
+3. Set up development environment
 4. Make your changes
-5. Run tests and checks:
-   ```bash
-   make validate  # Runs formatting, linting, type checking, and tests
-   ```
-6. Commit your changes (`git commit -m 'Add amazing feature'`)
-7. Push to the branch (`git push origin feature/amazing-feature`)
-8. Open a Pull Request
+5. Run tests and checks
+6. Submit a Pull Request
 
 ## License
 

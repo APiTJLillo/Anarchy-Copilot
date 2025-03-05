@@ -17,10 +17,11 @@ import {
     Computer as BrowserIcon,
     Storage as ProxyIcon,
     Language as WebIcon,
-    ArrowRightAlt as ArrowIcon,
+    ArrowRightAlt,
 } from '@mui/icons-material';
 import { useState, useEffect } from 'react';
 import { useWebSocket } from '../../hooks/useWebSocket';
+import { WS_ENDPOINT } from '../../config';
 
 export interface ConnectionEvent {
     type: 'request' | 'response';
@@ -30,151 +31,100 @@ export interface ConnectionEvent {
     bytesTransferred?: number;
 }
 
-export interface Connection {
+interface Connection {
     id: string;
-    host: string;
-    port: number;
-    start_time: number;
-    end_time?: number;
-    status: 'active' | 'closed' | 'error';
+    host?: string;
+    port?: number;
+    status: string;
     events: ConnectionEvent[];
-    bytes_received: number;
     bytes_sent: number;
-    requests_processed: number;
+    bytes_received: number;
     error?: string;
+    tls_info?: {
+        version?: string;
+        cipher?: string;
+        handshake_complete?: boolean;
+    };
 }
 
-const ConnectionFlow: React.FC<{ event: ConnectionEvent }> = ({ event }) => {
-    const theme = useTheme();
-
-    const getColor = (status: string) => {
-        switch (status) {
-            case 'success':
-                return theme.palette.success.main;
-            case 'error':
-                return theme.palette.error.main;
-            default:
-                return theme.palette.warning.main;
-        }
-    };
-
-    const getFlowComponents = () => {
-        const color = getColor(event.status);
-
-        switch (event.direction) {
-            case 'browser-proxy':
-                return (
-                    <>
-                        <BrowserIcon sx={{ color: color }} />
-                        <ArrowIcon sx={{ color: color }} />
-                        <ProxyIcon sx={{ color: color }} />
-                    </>
-                );
-            case 'proxy-web':
-                return (
-                    <>
-                        <ProxyIcon sx={{ color: color }} />
-                        <ArrowIcon sx={{ color: color }} />
-                        <WebIcon sx={{ color: color }} />
-                    </>
-                );
-            case 'web-proxy':
-                return (
-                    <>
-                        <WebIcon sx={{ color: color }} />
-                        <ArrowIcon sx={{ color: color }} />
-                        <ProxyIcon sx={{ color: color }} />
-                    </>
-                );
-            case 'proxy-browser':
-                return (
-                    <>
-                        <ProxyIcon sx={{ color: color }} />
-                        <ArrowIcon sx={{ color: color }} />
-                        <BrowserIcon sx={{ color: color }} />
-                    </>
-                );
-            default:
-                return null;
-        }
-    };
-
-    return (
-        <Box sx={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 1,
-            py: 0.5,
-        }}>
-            {getFlowComponents()}
-            <Typography variant="caption" color="textSecondary">
-                {new Date(event.timestamp).toLocaleTimeString()}
-                {event.bytesTransferred && ` (${event.bytesTransferred} bytes)`}
-            </Typography>
-        </Box>
-    );
-};
-
-const ConnectionItem: React.FC<{ connection: Connection }> = ({ connection }) => {
+const ConnectionCard: React.FC<{ connection: Connection }> = ({ connection }) => {
     const [expanded, setExpanded] = useState(false);
     const theme = useTheme();
 
-    const getStatusColor = (status: string) => {
-        switch (status) {
-            case 'active':
-                return theme.palette.success.main;
-            case 'closed':
-                return theme.palette.info.main;
-            case 'error':
-                return theme.palette.error.main;
-            default:
-                return theme.palette.text.primary;
-        }
+    const formatBytes = (bytes: number) => {
+        if (bytes === 0) return '0 B';
+        const k = 1024;
+        const sizes = ['B', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return `${(bytes / Math.pow(k, i)).toFixed(2)} ${sizes[i]}`;
     };
 
     return (
         <Card sx={{ mb: 1 }}>
-            <ListItem
-                button
-                onClick={() => setExpanded(!expanded)}
-                sx={{
-                    borderLeft: 3,
-                    borderColor: getStatusColor(connection.status),
-                }}
-            >
-                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
-                    <Typography>
-                        {connection.host}:{connection.port}
-                    </Typography>
-                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                        <Typography variant="caption" color="textSecondary">
-                            {connection.requests_processed} requests •
-                            {Math.round(connection.bytes_received / 1024)}KB received •
-                            {Math.round(connection.bytes_sent / 1024)}KB sent
+            <CardContent>
+                <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <BrowserIcon color="primary" />
+                        <ArrowRightAlt />
+                        <ProxyIcon color="secondary" />
+                        <ArrowRightAlt />
+                        <WebIcon color="primary" />
+                        <Typography variant="body1">
+                            {connection.host}:{connection.port}
                         </Typography>
-                        {expanded ? <ExpandLess /> : <ExpandMore />}
+                    </Box>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                        <Typography variant="body2" color="textSecondary">
+                            {formatBytes(connection.bytes_sent)} sent
+                        </Typography>
+                        <Typography variant="body2" color="textSecondary">
+                            {formatBytes(connection.bytes_received)} received
+                        </Typography>
+                        <IconButton size="small" onClick={() => setExpanded(!expanded)}>
+                            {expanded ? <ExpandLess /> : <ExpandMore />}
+                        </IconButton>
                     </Box>
                 </Box>
-            </ListItem>
-            <Collapse in={expanded}>
-                <CardContent>
-                    <List sx={{ pl: 2 }}>
-                        {connection.events.map((event, index) => (
-                            <ListItem key={index} sx={{ py: 0 }}>
-                                <ConnectionFlow event={event} />
-                            </ListItem>
-                        ))}
-                    </List>
-                </CardContent>
-            </Collapse>
+
+                <Collapse in={expanded}>
+                    <Box sx={{ mt: 2 }}>
+                        <Typography variant="subtitle2" gutterBottom>
+                            Status: {connection.status}
+                            {connection.error && (
+                                <Typography color="error" variant="body2">
+                                    Error: {connection.error}
+                                </Typography>
+                            )}
+                        </Typography>
+                        {connection.tls_info && (
+                            <Typography variant="body2" color="textSecondary">
+                                TLS: {connection.tls_info.version} ({connection.tls_info.cipher})
+                            </Typography>
+                        )}
+                        <List dense>
+                            {connection.events.map((event, index) => (
+                                <ListItem key={index}>
+                                    <Typography variant="body2" sx={{
+                                        color: event.status === 'error' ? 'error.main' :
+                                            event.status === 'success' ? 'success.main' :
+                                                'text.primary'
+                                    }}>
+                                        {new Date(event.timestamp * 1000).toLocaleTimeString()} - {event.type} ({event.direction})
+                                        {event.bytesTransferred && ` - ${formatBytes(event.bytesTransferred)}`}
+                                    </Typography>
+                                </ListItem>
+                            ))}
+                        </List>
+                    </Box>
+                </Collapse>
+            </CardContent>
         </Card>
     );
 };
 
 const ConnectionMonitor: React.FC = () => {
     const [connections, setConnections] = useState<Connection[]>([]);
-    const wsUrl = `${process.env.REACT_APP_API_BASE_URL?.replace('http', 'ws') || 'ws://localhost:8000'}/api/proxy/ws`;
-    const { isConnected, error } = useWebSocket(wsUrl, {
+    const { isConnected, error } = useWebSocket(WS_ENDPOINT, {
         onMessage: (data) => {
             if (data.type === 'connection_update') {
                 setConnections(prev => {
@@ -185,7 +135,12 @@ const ConnectionMonitor: React.FC = () => {
                     } else {
                         updated.push(data.data);
                     }
-                    return updated;
+                    // Sort by most recent activity
+                    return updated.sort((a, b) => {
+                        const aTime = a.events[a.events.length - 1]?.timestamp || 0;
+                        const bTime = b.events[b.events.length - 1]?.timestamp || 0;
+                        return bTime - aTime;
+                    });
                 });
             } else if (data.type === 'connection_closed') {
                 setConnections(prev => prev.filter(c => c.id !== data.data.id));
@@ -224,20 +179,15 @@ const ConnectionMonitor: React.FC = () => {
     }
 
     return (
-        <Paper sx={{ p: 2 }}>
+        <Box>
             <Typography variant="h6" gutterBottom>
                 Active Connections ({connections.length})
             </Typography>
-            <List>
-                {connections.map((connection) => (
-                    <ConnectionItem
-                        key={connection.id}
-                        connection={connection}
-                    />
-                ))}
-            </List>
-        </Paper>
+            {connections.map(connection => (
+                <ConnectionCard key={connection.id} connection={connection} />
+            ))}
+        </Box>
     );
-};
+}
 
 export default ConnectionMonitor;

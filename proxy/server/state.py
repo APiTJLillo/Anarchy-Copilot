@@ -2,9 +2,19 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Protocol
 
 logger = logging.getLogger("proxy.core")
+
+class ConnectionEventBroadcaster(Protocol):
+    """Interface for broadcasting connection events."""
+    async def broadcast_connection_update(self, connection: Any) -> None:
+        """Broadcast connection updates to all connected clients."""
+        ...
+
+    async def broadcast_connection_closed(self, connection_id: str) -> None:
+        """Broadcast when a connection is closed."""
+        ...
 
 class ProxyState:
     """Track proxy state information."""
@@ -30,14 +40,25 @@ class ProxyState:
                 "connection_errors": 0
             }
             self._lock = asyncio.Lock()
+            self._event_broadcaster: Optional[ConnectionEventBroadcaster] = None
             ProxyState._initialized = True
+
+    def set_event_broadcaster(self, broadcaster: ConnectionEventBroadcaster) -> None:
+        """Set the event broadcaster for connection updates."""
+        self._event_broadcaster = broadcaster
 
     async def add_connection(self, conn_id: str, info: Dict[str, Any]) -> None:
         """Add a new connection to tracking."""
         async with self._lock:
-            self._connections[conn_id] = info
+            self._connections[conn_id] = {
+                **info,
+                "created_at": datetime.now(timezone.utc),
+                "status": "initializing"
+            }
             self._stats["total_connections"] += 1
             self._stats["active_connections"] += 1
+            if self._event_broadcaster:
+                await self._event_broadcaster.broadcast_connection_update(info)
             logger.debug(f"Added connection {conn_id} to state tracking")
 
     async def remove_connection(self, conn_id: str) -> None:
@@ -51,6 +72,8 @@ class ProxyState:
                 self._stats["total_bytes_received"] += conn_info.get("bytes_received", 0)
                 if conn_info.get("error"):
                     self._stats["connection_errors"] += 1
+                if self._event_broadcaster:
+                    await self._event_broadcaster.broadcast_connection_closed(conn_id)
                 logger.debug(f"Removed connection {conn_id} from state tracking")
 
     async def update_connection(self, conn_id: str, key: str, value: Any) -> None:
@@ -58,6 +81,8 @@ class ProxyState:
         async with self._lock:
             if conn_id in self._connections:
                 self._connections[conn_id][key] = value
+                if self._event_broadcaster:
+                    await self._event_broadcaster.broadcast_connection_update(self._connections[conn_id])
 
     async def get_connection_info(self, conn_id: str) -> Optional[Dict[str, Any]]:
         """Get information about a specific connection."""

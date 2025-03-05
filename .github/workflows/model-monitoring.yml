@@ -1,0 +1,209 @@
+name: Model Monitoring & Retraining
+
+on:
+  # Run daily at midnight UTC
+  schedule:
+    - cron: '0 0 * * *'
+  
+  # Run after benchmark tracking
+  workflow_run:
+    workflows: ["Benchmark Tracking"]
+    types:
+      - completed
+  
+  # Allow manual triggering
+  workflow_dispatch:
+
+env:
+  ENABLE_SCHEDULED_MONITORING: true
+  MIN_HISTORY_DAYS: 7
+  MAX_CONCURRENT_RETRAINS: 3
+  NOTIFICATION_THRESHOLD: 0.7
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+      with:
+        fetch-depth: 0  # Full history for trend analysis
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install plotly numpy pandas scikit-learn joblib schedule
+
+    - name: Load model history
+      uses: actions/cache@v3
+      with:
+        path: |
+          benchmark_results/models
+          benchmark_results/performance_history.json
+          benchmark_results/model_metrics.json
+        key: model-history-${{ github.sha }}
+        restore-keys: |
+          model-history-
+
+    - name: Run monitoring
+      id: monitoring
+      run: |
+        python scripts/retrain_throttling_models.py
+        
+        # Extract retraining recommendations
+        if [ -f benchmark_results/model_monitoring.html ]; then
+          NEEDS_RETRAIN=$(python -c '
+          import re
+          with open("benchmark_results/model_monitoring.html") as f:
+              content = f.read()
+          retrain = re.findall(r"Needs Retraining:</strong> ([^<]+)", content)
+          print("\n".join(retrain))
+          ')
+          echo "needs_retrain<<EOF" >> $GITHUB_ENV
+          echo "$NEEDS_RETRAIN" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+        fi
+
+    - name: Check for urgent retraining
+      id: check_urgent
+      run: |
+        python - <<EOF
+        import json
+        with open('benchmark_results/model_metrics.json') as f:
+            metrics = json.load(f)
+        
+        urgent = False
+        messages = []
+        
+        for metric, data in metrics.items():
+            if data['prediction_error'] > 0.3 or data['drift_score'] > 0.5:
+                urgent = True
+                messages.append(f"URGENT: {metric} requires immediate retraining")
+        
+        if urgent:
+            print("::set-output name=urgent::true")
+            print("::set-output name=messages::" + "; ".join(messages))
+        else:
+            print("::set-output name=urgent::false")
+        EOF
+
+    - name: Retrain models
+      if: env.needs_retrain != '' || steps.check_urgent.outputs.urgent == 'true'
+      run: |
+        # Set up parallel retraining
+        echo "Starting model retraining..."
+        
+        # Create list of models to retrain
+        MODELS_TO_RETRAIN=$(python -c '
+        import json
+        with open("benchmark_results/model_metrics.json") as f:
+            metrics = json.load(f)
+        need_retrain = [m for m, d in metrics.items() 
+                       if d["prediction_error"] > 0.2 or d["drift_score"] > 0.3]
+        print("\n".join(need_retrain))
+        ')
+        
+        # Run retraining in parallel with max concurrency
+        echo "$MODELS_TO_RETRAIN" | xargs -P $MAX_CONCURRENT_RETRAINS -I {} \
+          python -c "
+        from scripts.predict_throttling_performance import PerformancePredictor
+        from pathlib import Path
+        predictor = PerformancePredictor(Path('benchmark_results/performance_history.json'))
+        predictor.train_models(metrics=['{}'])
+        "
+
+    - name: Generate performance report
+      run: python scripts/analyze_throttling_stats.py
+
+    - name: Create model evaluation summary
+      run: |
+        python - <<EOF
+        import json
+        import pandas as pd
+        from pathlib import Path
+        
+        def create_summary():
+            metrics_file = Path('benchmark_results/model_metrics.json')
+            if not metrics_file.exists():
+                return ""
+            
+            with open(metrics_file) as f:
+                metrics = json.load(f)
+            
+            summary = "## Model Performance Summary\n\n"
+            summary += "| Metric | R² Score | Error | Drift | Status |\n"
+            summary += "|--------|----------|--------|-------|--------|\n"
+            
+            for metric, data in metrics.items():
+                status = "✅" if data['prediction_error'] < 0.2 and data['drift_score'] < 0.3 else "⚠️"
+                summary += f"| {metric} | {data['r2']:.3f} | {data['prediction_error']:.1%} | {data['drift_score']:.3f} | {status} |\n"
+            
+            return summary
+        
+        with open('model_summary.md', 'w') as f:
+            f.write(create_summary())
+        EOF
+
+    - name: Save model artifacts
+      uses: actions/upload-artifact@v3
+      with:
+        name: model-artifacts
+        path: |
+          benchmark_results/models/
+          benchmark_results/model_metrics.json
+          benchmark_results/model_monitoring.html
+          model_summary.md
+        retention-days: 90
+
+    - name: Update cache
+      uses: actions/cache/save@v3
+      with:
+        path: |
+          benchmark_results/models
+          benchmark_results/performance_history.json
+          benchmark_results/model_metrics.json
+        key: model-history-${{ github.sha }}
+
+    - name: Comment on related pull request
+      if: github.event_name == 'workflow_run'
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const fs = require('fs');
+          
+          const summary = fs.readFileSync('model_summary.md', 'utf8');
+          const body = `# Model Monitoring Results\n\n${summary}\n\n` +
+                      (process.env.needs_retrain ? 
+                       `### Models Requiring Retraining\n${process.env.needs_retrain}\n\n` : '') +
+                      `[Full Report](${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID})`;
+          
+          const pulls = await github.rest.pulls.list({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            state: 'open'
+          });
+          
+          for (const pull of pulls.data) {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pull.number,
+              body: body
+            });
+          }
+
+    - name: Send notifications
+      if: steps.check_urgent.outputs.urgent == 'true'
+      uses: ./.github/actions/notify
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        title: "Urgent Model Retraining Required"
+        message: ${{ steps.check_urgent.outputs.messages }}
+        severity: critical

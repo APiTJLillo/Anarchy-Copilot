@@ -1,38 +1,56 @@
-"""Proxy module for intercepting and modifying HTTP traffic."""
+"""Anarchy HTTPS Proxy Server.
 
-from .config import ProxyConfig
-from .interceptor import (
-    InterceptedRequest,
-    InterceptedResponse,
-    RequestInterceptor,
-    ResponseInterceptor,
-    ProxyInterceptor,
-    JSONModifyInterceptor,
-    SecurityHeadersInterceptor,
-)
-from .analysis.analyzer import TrafficAnalyzer
-from .session import ProxySession
+A high-performance HTTPS proxy server with SSL/TLS interception capabilities
+for security testing and debugging.
+"""
 
-# Import ProxyServer lazily to avoid circular imports
-def get_proxy_server():
-    """Get the ProxyServer class.
+import os
+from typing import Optional, Tuple
+
+from .models import ProxyServer
+from .main import run_server
+from .utils.constants import NetworkConfig, SSLConfig
+
+__version__ = '1.0.0'
+
+async def create_proxy_server(
+    host: Optional[str] = None,
+    port: Optional[int] = None,
+    cert_path: Optional[str] = None,
+    key_path: Optional[str] = None
+) -> ProxyServer:
+    """Create a new proxy server instance.
+    
+    Args:
+        host: Host address to bind to (default: '0.0.0.0')
+        port: Port to listen on (default: 8081)
+        cert_path: Path to SSL certificate (default: from environment or certs/ca.crt)
+        key_path: Path to SSL private key (default: from environment or certs/ca.key)
     
     Returns:
-        ProxyServer class, imported lazily to avoid circular imports
+        ProxyServer: Configured proxy server instance
     """
-    from .core import ProxyServer
-    return ProxyServer
+    return ProxyServer(
+        host=host,
+        port=port,
+        cert_path=cert_path,
+        key_path=key_path
+    )
+
+def get_default_paths() -> Tuple[str, str]:
+    """Get default certificate paths.
+    
+    Returns:
+        Tuple[str, str]: (certificate path, key path)
+    """
+    cert_path = os.getenv('CA_CERT_PATH', SSLConfig.DEFAULT_CERT_PATH)
+    key_path = os.getenv('CA_KEY_PATH', SSLConfig.DEFAULT_KEY_PATH)
+    return cert_path, key_path
 
 __all__ = [
-    'ProxyConfig',
-    'get_proxy_server',
-    'InterceptedRequest',
-    'InterceptedResponse',
-    'RequestInterceptor',
-    'ResponseInterceptor',
-    'ProxyInterceptor',
-    'JSONModifyInterceptor',
-    'SecurityHeadersInterceptor',
-    'ProxySession',
-    'TrafficAnalyzer',
+    'ProxyServer',
+    'run_server',
+    'create_proxy_server',
+    'get_default_paths',
+    '__version__'
 ]

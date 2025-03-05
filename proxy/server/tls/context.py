@@ -2,9 +2,10 @@
 import sys
 import ssl
 import socket
+import os
 from typing import Tuple, Optional, List, Dict, Union, Any
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from cryptography import x509
 from cryptography.x509 import (
@@ -39,16 +40,26 @@ class TlsConfig:
     """TLS configuration settings."""
     minimum_version: ssl.TLSVersion = ssl.TLSVersion.TLSv1_2
     cipher_string: str = (
+        # TLS 1.3 ciphers
+        "TLS_AES_256_GCM_SHA384:"
+        "TLS_CHACHA20_POLY1305_SHA256:"
+        "TLS_AES_128_GCM_SHA256:"
+        # TLS 1.2 ciphers
         "ECDHE-ECDSA-AES256-GCM-SHA384:"
         "ECDHE-RSA-AES256-GCM-SHA384:"
         "ECDHE-ECDSA-CHACHA20-POLY1305:"
-        "ECDHE-RSA-CHACHA20-POLY1305"
+        "ECDHE-RSA-CHACHA20-POLY1305:"
+        "ECDHE-ECDSA-AES128-GCM-SHA256:"
+        "ECDHE-RSA-AES128-GCM-SHA256:"
+        # Fallback ciphers
+        "DHE-RSA-AES256-GCM-SHA384:"
+        "DHE-RSA-AES128-GCM-SHA256"
     )
     verify_mode: ssl.VerifyMode = ssl.CERT_NONE
-    check_hostname: bool = True
+    check_hostname: bool = False  # Changed to False for intercepting proxy
     session_tickets: bool = True
     session_cache_mode: int = SessionCache.BOTH
-    alpn_protocols: list[str] = None
+    alpn_protocols: list[str] = field(default_factory=lambda: ['h2', 'http/1.1'])
 
 class CertificateError(ssl.SSLError):
     """Custom certificate error."""
@@ -240,32 +251,30 @@ class TLSContext:
             raise ssl.SSLError(str(e))
 
     def __getattr__(self, name):
+        """Forward unknown attributes to the underlying SSLContext."""
         return getattr(self._ctx, name)
 
     def set_session_cache_mode(self, mode: int) -> None:
-        """Set session cache mode."""
-        if mode not in (SessionCache.OFF, SessionCache.CLIENT, SessionCache.SERVER, SessionCache.BOTH):
-            raise ValueError("Invalid session cache mode")
+        """Set the session cache mode.
+        
+        Args:
+            mode: One of the SessionCache mode constants
+        """
         self._session_cache_mode = mode
-        if mode == SessionCache.OFF:
-            self._session_cache.clear()
-            self._session_reused = False
-
+        # Store mode in our wrapper
+        if hasattr(self._ctx, 'set_session_cache_mode'):
+            self._ctx.set_session_cache_mode(mode)
+        # If the underlying context doesn't support it, we'll handle it ourselves
+        
     def store_session(self, session_id: bytes, session_data: bytes) -> None:
-        """Store session data."""
-        if self._session_cache_mode == SessionCache.OFF:
-            return
-        self._session_cache[session_id] = session_data
-        self._session_reused = True
-
+        """Store a session in the cache."""
+        if self._session_cache_mode in (SessionCache.SERVER, SessionCache.BOTH):
+            self._session_cache[session_id] = session_data
+            
     def get_session(self, session_id: bytes) -> Optional[bytes]:
-        """Retrieve session data."""
-        if self._session_cache_mode == SessionCache.OFF:
-            return None
-        data = self._session_cache.get(session_id)
-        if data:
-            self._session_reused = True
-        return data
+        """Get a session from the cache."""
+        if self._session_cache_mode in (SessionCache.CLIENT, SessionCache.BOTH):
+            return self._session_cache.get(session_id)
 
     def verify_certificate(self, cert: Certificate) -> bool:
         """Verify certificate validity and revocation status."""
@@ -293,167 +302,78 @@ class TLSContext:
         self._crls.clear()
 
 class TlsContextFactory:
-    """Factory for creating TLS contexts with enhanced functionality."""
-    
+    """Factory for creating TLS contexts."""
+
     def __init__(self, config: Optional[TlsConfig] = None):
         self.config = config or TlsConfig()
-        self.config.alpn_protocols = self.config.alpn_protocols or ['h2', 'http/1.1']
 
-    @staticmethod
-    def get_connection_info(ssl_object: ssl.SSLSocket) -> Dict[str, Any]:
-        """Extract TLS connection information."""
+    def create_server_context(self, cert_path: Union[str, Path], key_path: Union[str, Path]) -> TLSContext:
+        """Create a server-side SSL context."""
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        
+        # Convert paths to strings and resolve them
+        cert_path = str(Path(cert_path).resolve())
+        key_path = str(Path(key_path).resolve())
+        
+        # Verify files exist
+        if not os.path.exists(cert_path):
+            raise CertificateError(f"Certificate file not found: {cert_path}")
+        if not os.path.exists(key_path):
+            raise CertificateError(f"Private key file not found: {key_path}")
+        
+        # Configure TLS version and ciphers
+        context.minimum_version = self.config.minimum_version
+        context.set_ciphers(self.config.cipher_string)
+        
+        # Load certificate and private key with detailed error handling
         try:
-            info = {
-                "version": None,
-                "cipher": {"name": None, "version": None, "bits": None},
-                "compression": None,
-                "alpn_protocol": None,
-                "server_hostname": None,
-                "peer_certificate": None,
-                "peer_cert": None,
-                "session_reused": False
-            }
-
-            # Get version
-            try:
-                ver = ssl_object.version()
-                info["version"] = ver() if callable(ver) else ver
-            except (AttributeError, TypeError):
-                pass
-
-            # Get cipher info
-            try:
-                cipher = ssl_object.cipher()
-                if cipher and len(cipher) >= 3:
-                    info["cipher"].update({
-                        "name": cipher[0],
-                        "version": cipher[1],
-                        "bits": cipher[2]
-                    })
-            except (AttributeError, TypeError):
-                pass
-
-            # Get compression and ALPN
-            try:
-                info["compression"] = ssl_object.compression()
-            except AttributeError:
-                pass
-
-            try:
-                if hasattr(ssl_object, 'selected_alpn_protocol'):
-                    info["alpn_protocol"] = ssl_object.selected_alpn_protocol()
-            except AttributeError:
-                pass
-
-            # Get server hostname
-            info["server_hostname"] = getattr(ssl_object, 'server_hostname', None)
-
-            # Get peer certificate
-            try:
-                cert = None
-                if hasattr(ssl_object, 'getpeercert'):
-                    der_cert = ssl_object.getpeercert(binary_form=True)
-                    if der_cert:
-                        cert = x509.load_der_x509_certificate(der_cert, default_backend())
-                elif hasattr(ssl_object, 'get_peer_certificate'):
-                    cert_data = ssl_object.get_peer_certificate()
-                    if cert_data:
-                        cert = x509.load_der_x509_certificate(cert_data, default_backend())
-                
-                if cert:
-                    cert_info = CertificateHelper.extract_cert_info(cert)
-                    info["peer_certificate"] = cert_info
-                    info["peer_cert"] = cert_info  # Keep both for compatibility
-            except Exception as e:
-                logger.error(f"Error getting peer certificate: {e}")
-                info["peer_certificate"] = None
-                info["peer_cert"] = None
-
-            # Get session reuse info
-            try:
-                reused = getattr(ssl_object, 'session_reused', None)
-                info["session_reused"] = bool(reused() if callable(reused) else reused if reused is not None else False)
-            except (AttributeError, TypeError):
-                pass
-
-            return info
-        except Exception as e:
-            logger.error(f"Error getting connection info: {e}")
-            return {}
-
-    def create_server_context(self, cert_path: str, key_path: str) -> TLSContext:
-        """Create server-side SSL context with modern security settings."""
-        try:
-            if not Path(cert_path).exists() or not Path(key_path).exists():
-                raise FileNotFoundError(f"Certificate or key file not found: {cert_path}, {key_path}")
+            context.load_cert_chain(cert_path, key_path)
+            logger.info(f"Successfully loaded certificate from {cert_path}")
+        except (ssl.SSLError, IOError) as e:
+            logger.error(f"Failed to load certificate: {e}")
+            raise CertificateError(f"Failed to load certificate: {e}")
             
-            ctx = TLSContext(ssl.create_default_context(ssl.Purpose.CLIENT_AUTH))
-            ctx._ctx.load_cert_chain(certfile=cert_path, keyfile=key_path)
-            ctx.add_cert(cert_path)
+        # Configure verification
+        context.verify_mode = self.config.verify_mode
+        context.check_hostname = self.config.check_hostname
+        
+        # Enable session management
+        context.options |= ssl.OP_NO_TICKET
+        
+        # Set ALPN protocols
+        if self.config.alpn_protocols:
+            context.set_alpn_protocols(self.config.alpn_protocols)
             
-            # Version handling
-            ctx._ctx.minimum_version = self.config.minimum_version
-            if ctx._ctx.minimum_version < ssl.TLSVersion.TLSv1_2:
-                raise ValueError("TLS version must be 1.2 or higher")
-            ctx._ctx.maximum_version = ssl.TLSVersion.TLSv1_3
-            ctx._ctx.set_ciphers(self.config.cipher_string)
-            
-            # Security options
-            ctx._ctx.options |= (
-                ssl.OP_NO_COMPRESSION |
-                ssl.OP_SINGLE_DH_USE |
-                ssl.OP_SINGLE_ECDH_USE |
-                ssl.OP_NO_RENEGOTIATION |
-                ssl.OP_NO_TLSv1 |
-                ssl.OP_NO_TLSv1_1
-            )
-            
-            # Configure ALPN
-            if hasattr(ssl, 'HAS_ALPN') and ssl.HAS_ALPN:
-                ctx._ctx.set_alpn_protocols(self.config.alpn_protocols)
-            
-            # Configure session handling
-            ctx._ctx.options |= ssl.OP_NO_TICKET if not self.config.session_tickets else 0
-            ctx.set_session_cache_mode(self.config.session_cache_mode)
-            
-            return ctx
-        except Exception as e:
-            logger.error(f"Failed to create server TLS context: {e}")
-            raise
+        # Create TLSContext wrapper and configure session cache
+        tls_context = TLSContext(context)
+        tls_context.set_session_cache_mode(self.config.session_cache_mode)
+        return tls_context
 
     def create_client_context(self, server_hostname: str) -> TLSContext:
-        """Create client-side SSL context."""
-        try:
-            ctx = TLSContext(ssl.create_default_context())
-            ctx._server_hostname = server_hostname
+        """Create a client-side SSL context."""
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        
+        # Configure TLS version and ciphers
+        context.minimum_version = self.config.minimum_version
+        context.set_ciphers(self.config.cipher_string)
+        
+        # Configure verification settings for client
+        # Must set check_hostname to False before setting verify_mode to CERT_NONE
+        context.check_hostname = False  # For intercepting proxy
+        context.verify_mode = ssl.CERT_NONE  # For intercepting proxy
+        
+        # Enable session management
+        if self.config.session_tickets:
+            context.options &= ~ssl.OP_NO_TICKET
+        
+        # Set ALPN protocols
+        if self.config.alpn_protocols:
+            context.set_alpn_protocols(self.config.alpn_protocols)
             
-            # Version handling
-            ctx._ctx.minimum_version = self.config.minimum_version
-            if ctx._ctx.minimum_version < ssl.TLSVersion.TLSv1_2:
-                raise ValueError("TLS version must be 1.2 or higher")
-            ctx._ctx.maximum_version = ssl.TLSVersion.TLSv1_3
-            ctx._ctx.set_ciphers(self.config.cipher_string)
-            
-            # Configure hostname verification and cert validation
-            ctx._ctx.check_hostname = self.config.check_hostname
-            if self.config.check_hostname:
-                ctx._ctx.verify_mode = ssl.CERT_REQUIRED
-                ctx._ctx.verify_flags = ssl.VERIFY_X509_STRICT
-            else:
-                ctx._ctx.verify_mode = self.config.verify_mode
-            
-            # Configure session handling
-            ctx._ctx.options |= ssl.OP_NO_TICKET if not self.config.session_tickets else 0
-            ctx.set_session_cache_mode(self.config.session_cache_mode)
-            
-            # Configure ALPN
-            if hasattr(ssl, 'HAS_ALPN') and ssl.HAS_ALPN:
-                ctx._ctx.set_alpn_protocols(self.config.alpn_protocols)
-
-            return ctx
-        except Exception as e:
-            logger.error(f"Failed to create client TLS context: {e}")
-            raise
+        # Create TLSContext wrapper and configure session cache
+        tls_context = TLSContext(context)
+        tls_context.set_session_cache_mode(self.config.session_cache_mode)
+        return tls_context
 
     def verify_hostname(self, cert: Certificate, hostname: str) -> bool:
         """Verify certificate hostname against SAN or CN."""

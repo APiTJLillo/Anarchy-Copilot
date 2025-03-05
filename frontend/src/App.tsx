@@ -1,11 +1,32 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
-import { Box, CssBaseline, ThemeProvider, createTheme } from '@mui/material';
+import { CssBaseline, ThemeProvider, createTheme } from '@mui/material';
+import { Provider } from 'react-redux';
+import { configureStore } from '@reduxjs/toolkit';
 import AppLayout from './components/layout/AppLayout';
 import ReconDashboard from './ReconDashboard';
 import { ProxyDashboard } from './ProxyDashboard';
 import { ProjectManager } from './components/projects/ProjectManager';
 import { ProjectProvider } from './contexts/ProjectContext';
+import AISettings from './components/settings/AISettings';
+import { aiReducer } from './store/ai/reducer';
+import type { RootState } from './store/types';
+import { AIRoutes } from './routes/ai';
+
+// Create Redux store with proper typing
+const store = configureStore({
+  reducer: {
+    ai: aiReducer
+  },
+  middleware: (getDefaultMiddleware) =>
+    getDefaultMiddleware({
+      serializableCheck: {
+        // It's safe to ignore these cases since we handle them properly
+        ignoredActionPaths: ['error', 'payload.error'],
+        ignoredPaths: ['ai.error']
+      }
+    })
+});
 
 // Create base theme
 const theme = createTheme({
@@ -35,21 +56,27 @@ const theme = createTheme({
 
 function App() {
   return (
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
-      <ProjectProvider>
-        <Router>
-          <AppLayout>
-            <Routes>
-              <Route path="/" element={<ReconDashboard />} />
-              <Route path="/recon" element={<ReconDashboard />} />
-              <Route path="/proxy" element={<ProxyDashboard />} />
-              <Route path="/projects" element={<ProjectManager />} />
-            </Routes>
-          </AppLayout>
-        </Router>
-      </ProjectProvider>
-    </ThemeProvider>
+    <Provider store={store}>
+      <ThemeProvider theme={theme}>
+        <CssBaseline />
+        <ProjectProvider>
+          <Router>
+            <AppLayout>
+              <Routes>
+                <Route path="/" element={<ReconDashboard />} />
+                <Route path="/recon" element={<ReconDashboard />} />
+                <Route path="/proxy" element={<ProxyDashboard />} />
+                <Route path="/projects" element={<ProjectManager />} />
+
+                {/* AI Routes */}
+                <Route path="/ai/*" element={AIRoutes} />
+                <Route path="/settings/ai" element={<AISettings />} />
+              </Routes>
+            </AppLayout>
+          </Router>
+        </ProjectProvider>
+      </ThemeProvider>
+    </Provider>
   );
 }
 

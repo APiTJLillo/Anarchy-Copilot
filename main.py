@@ -1,6 +1,10 @@
 """Main application module."""
 from typing import Dict, Any, List, Optional
 from datetime import datetime
+import asyncio
+
+# Force use of standard asyncio event loop
+asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
 
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
@@ -231,6 +235,7 @@ if __name__ == "__main__":
         port=settings.proxy_port,
         ssl_keyfile="app/certs/ca.key",
         ssl_certfile="app/certs/ca.crt",
+        loop="asyncio",  # Use standard asyncio loop
         log_config={
             "version": 1,
             "disable_existing_loggers": False,

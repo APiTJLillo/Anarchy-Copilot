@@ -14,7 +14,9 @@ import {
   useTheme,
   Avatar,
   Menu,
-  MenuItem
+  MenuItem,
+  Divider,
+  ListSubheader,
 } from '@mui/material';
 import {
   Menu as MenuIcon,
@@ -24,17 +26,43 @@ import {
   Security as SecurityIcon,
   Build as BuildIcon,
   FolderSpecial as ProjectIcon,
+  SmartToy as AIIcon,
+  Chat as ChatIcon,
+  Analytics as AnalyticsIcon,
+  Settings as SettingsIcon,
+  Speed as MonitoringIcon,
 } from '@mui/icons-material';
 import { ProjectSelector } from '../projects/ProjectSelector';
 
 const DRAWER_WIDTH = 240;
 
-const menuItems = [
-  { text: 'Projects', icon: <ProjectIcon />, path: '/projects' },
-  { text: 'Reconnaissance', icon: <SearchIcon />, path: '/recon' },
-  { text: 'Proxy', icon: <NetworkIcon />, path: '/proxy' },
-  { text: 'Vulnerabilities', icon: <SecurityIcon />, path: '/vulnerabilities' },
-  { text: 'Tools', icon: <BuildIcon />, path: '/tools' },
+// Menu structure with grouping
+const menuGroups = [
+  {
+    header: "Main",
+    items: [
+      { text: 'Projects', icon: <ProjectIcon />, path: '/projects' },
+      { text: 'Reconnaissance', icon: <SearchIcon />, path: '/recon' },
+      { text: 'Proxy', icon: <NetworkIcon />, path: '/proxy' },
+      { text: 'Vulnerabilities', icon: <SecurityIcon />, path: '/vulnerabilities' },
+    ]
+  },
+  {
+    header: "AI Features",
+    items: [
+      { text: 'AI Hub', icon: <AIIcon />, path: '/ai' },
+      { text: 'Chat', icon: <ChatIcon />, path: '/ai/chat' },
+      { text: 'Analytics', icon: <AnalyticsIcon />, path: '/ai/analytics' },
+      { text: 'Monitoring', icon: <MonitoringIcon />, path: '/ai/monitoring' },
+    ]
+  },
+  {
+    header: "Configuration",
+    items: [
+      { text: 'Tools', icon: <BuildIcon />, path: '/tools' },
+      { text: 'AI Settings', icon: <SettingsIcon />, path: '/settings/ai' },
+    ]
+  }
 ];
 
 interface AppLayoutProps {
@@ -66,6 +94,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
   const handleDrawerToggle = () => {
     setDrawerOpen(!drawerOpen);
   };
+
   const drawer = (
     <Box>
       <Toolbar>
@@ -74,30 +103,41 @@ export default function AppLayout({ children }: AppLayoutProps) {
         </Typography>
       </Toolbar>
       <List>
-        {menuItems.map((item) => (
-          <ListItem
-            button
-            key={item.text}
-            onClick={() => navigate(item.path)}
-            selected={location.pathname === item.path}
-            sx={{
-              '&.Mui-selected': {
-                backgroundColor: 'rgba(0, 255, 0, 0.1)',
-                '&:hover': {
-                  backgroundColor: 'rgba(0, 255, 0, 0.2)',
-                },
-              },
-            }}
-          >
-            <ListItemIcon sx={{ color: 'primary.main' }}>
-              {item.icon}
-            </ListItemIcon>
-            <ListItemText primary={item.text} />
-          </ListItem>
+        {menuGroups.map((group, index) => (
+          <React.Fragment key={group.header}>
+            {index > 0 && <Divider />}
+            <ListSubheader>{group.header}</ListSubheader>
+            {group.items.map((item) => (
+              <ListItem
+                button
+                key={item.text}
+                onClick={() => navigate(item.path)}
+                selected={location.pathname === item.path}
+                sx={{
+                  '&.Mui-selected': {
+                    backgroundColor: 'rgba(0, 255, 0, 0.1)',
+                    '&:hover': {
+                      backgroundColor: 'rgba(0, 255, 0, 0.2)',
+                    },
+                  },
+                }}
+              >
+                <ListItemIcon sx={{ color: 'primary.main' }}>
+                  {item.icon}
+                </ListItemIcon>
+                <ListItemText primary={item.text} />
+              </ListItem>
+            ))}
+          </React.Fragment>
         ))}
       </List>
     </Box>
   );
+
+  // Find current menu item
+  const currentMenuItem = menuGroups
+    .flatMap(group => group.items)
+    .find(item => item.path === location.pathname);
 
   return (
     <Box sx={{ display: 'flex', minHeight: '100vh' }}>
@@ -121,7 +161,7 @@ export default function AppLayout({ children }: AppLayoutProps) {
           </IconButton>
           <Box display="flex" justifyContent="space-between" alignItems="center" width="100%">
             <Typography variant="h6" noWrap component="div">
-              {menuItems.find(item => item.path === location.pathname)?.text || 'Dashboard'}
+              {currentMenuItem?.text || 'Dashboard'}
             </Typography>
             <Box display="flex" alignItems="center">
               <Box sx={{ borderRadius: 1, p: 1, mr: 2 }}>

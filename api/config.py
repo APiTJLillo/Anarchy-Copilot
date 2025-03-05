@@ -45,6 +45,48 @@ class Settings(BaseSettings):
     proxy_max_keepalive_connections: int = 20
     proxy_keepalive_timeout: int = 30
 
+    # AI Settings
+    ai_model: str = Field(
+        default="gpt-4",
+        description="Default language model to use"
+    )
+    ai_api_key: str = Field(
+        default="",
+        description="API key for language model service"
+    )
+    ai_translation_model: str = Field(
+        default="neural",
+        description="Translation model type (neural or basic)"
+    )
+    ai_auto_detect_language: bool = Field(
+        default=True,
+        description="Automatically detect and translate non-English text"
+    )
+    ai_enable_cultural_context: bool = Field(
+        default=True,
+        description="Enable cultural context adaptation"
+    )
+    ai_default_region: str = Field(
+        default="US",
+        description="Default region for cultural context"
+    )
+    ai_enable_cache: bool = Field(
+        default=True,
+        description="Enable caching of AI responses"
+    )
+    ai_cache_ttl: int = Field(
+        default=3600,
+        description="Cache TTL in seconds"
+    )
+    ai_max_tokens: int = Field(
+        default=4096,
+        description="Maximum tokens per request"
+    )
+    ai_temperature: float = Field(
+        default=0.7,
+        description="Temperature for AI response generation"
+    )
+
     model_config = SettingsConfigDict(
         env_prefix="ANARCHY_",
         validate_default=True,

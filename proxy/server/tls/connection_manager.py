@@ -6,7 +6,7 @@ import logging
 import asyncio
 
 from api.proxy.models import ConnectionInfo
-from api.proxy.websocket import connection_manager
+from proxy.server.state import proxy_state
 
 logger = logging.getLogger("proxy.core")
 
@@ -20,7 +20,7 @@ class ConnectionManager:
     def create_connection(self, connection_id: str, transport: Optional[asyncio.Transport] = None) -> None:
         """Create a new connection entry."""
         self._connection_count += 1
-        self._active_connections[connection_id] = {
+        conn_info = {
             "number": self._connection_count,
             "created_at": datetime.now(timezone.utc),
             "client_address": transport.get_extra_info('peername') if transport else None,
@@ -34,7 +34,9 @@ class ConnectionManager:
             "events": [],
             "error": None
         }
+        self._active_connections[connection_id] = conn_info
         logger.debug(f"Created new connection {self._connection_count} ({connection_id})")
+        asyncio.create_task(proxy_state.add_connection(connection_id, conn_info))
 
     def get_connection_info(self, connection_id: str) -> Optional[ConnectionInfo]:
         """Get current connection info."""
@@ -71,19 +73,21 @@ class ConnectionManager:
         """Update connection information."""
         if connection_id in self._active_connections:
             self._active_connections[connection_id][key] = value
+            asyncio.create_task(proxy_state.update_connection(connection_id, key, value))
             
     async def record_event(self, connection_id: str, event_type: str, direction: str, 
                           status: str, bytes_transferred: Optional[int] = None) -> None:
         """Record a connection event and broadcast update."""
         if connection_id in self._active_connections:
             conn_info = self._active_connections[connection_id]
-            conn_info["events"].append({
+            event = {
                 "timestamp": datetime.now(timezone.utc).timestamp(),
                 "type": event_type,
                 "direction": direction,
                 "status": status,
                 "bytes": bytes_transferred
-            })
+            }
+            conn_info["events"].append(event)
             
             if bytes_transferred:
                 if direction == "received":
@@ -91,10 +95,13 @@ class ConnectionManager:
                 else:
                     conn_info["bytes_sent"] += bytes_transferred
 
-            # Broadcast update through WebSocket
-            connection_info = self.get_connection_info(connection_id)
-            if connection_info:
-                await connection_manager.broadcast_connection_update(connection_info)
+            # Update state
+            await proxy_state.update_connection(connection_id, "events", conn_info["events"])
+            if bytes_transferred:
+                if direction == "received":
+                    await proxy_state.update_connection(connection_id, "bytes_received", conn_info["bytes_received"])
+                else:
+                    await proxy_state.update_connection(connection_id, "bytes_sent", conn_info["bytes_sent"])
 
     async def close_connection(self, connection_id: str) -> None:
         """Close and cleanup a connection."""
@@ -108,12 +115,8 @@ class ConnectionManager:
 
             # Update final state
             conn_info["end_time"] = datetime.now(timezone.utc)
-            
-            # Broadcast final state
-            connection_info = self.get_connection_info(connection_id)
-            if connection_info:
-                await connection_manager.broadcast_connection_update(connection_info)
-                await connection_manager.broadcast_connection_closed(connection_id)
+            await proxy_state.update_connection(connection_id, "end_time", conn_info["end_time"])
+            await proxy_state.remove_connection(connection_id)
 
             # Cleanup
             del self._active_connections[connection_id]

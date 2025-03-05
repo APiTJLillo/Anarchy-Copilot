@@ -7,14 +7,21 @@
  * When running in Docker, requests are made to 'http://dev:8000'
  * When accessing through browser, requests go to 'http://localhost:8000'
  */
-export const API_BASE_URL = 'http://localhost:8000';
+export const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
+
+/**
+ * WebSocket endpoint for proxy monitoring.
+ * Browser always connects through localhost since Docker DNS resolution
+ * isn't available in the browser context
+ */
+export const WS_ENDPOINT = `${API_BASE_URL.replace('http', 'ws')}/api/proxy/ws`;
 
 /**
  * WebSocket endpoint for proxy interception.
  * Browser always connects through localhost since Docker DNS resolution
  * isn't available in the browser context
  */
-export const WS_ENDPOINT = 'ws://localhost:8000/api/proxy/ws/intercept';
+export const WS_INTERCEPT_ENDPOINT = `${API_BASE_URL.replace('http', 'ws')}/api/proxy/ws/intercept`;
 
 /**
  * Configuration options.

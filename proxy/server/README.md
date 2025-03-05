@@ -82,7 +82,7 @@ proxy/server/
 ## Usage Example
 
 ```python
-from proxy.server.https_intercept_protocol import HttpsInterceptProtocol
+from proxy.server.protocol import HttpsInterceptProtocol
 from proxy.server.certificates import CertificateAuthority
 
 # Create CA for certificate generation

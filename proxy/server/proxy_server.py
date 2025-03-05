@@ -17,6 +17,9 @@ from uuid import uuid4
 from sqlalchemy import text
 from datetime import datetime
 
+# Force use of standard asyncio event loop
+asyncio.set_event_loop_policy(asyncio.DefaultEventLoopPolicy())
+
 from database import AsyncSessionLocal
 from ..config import ProxyConfig
 
@@ -24,7 +27,7 @@ if TYPE_CHECKING:
     from api.proxy.database_models import ProxyHistoryEntry, ProxySession as DBProxySession
 
 from .custom_protocol import TunnelProtocol
-from .https_intercept_protocol import HttpsInterceptProtocol
+from .protocol import HttpsInterceptProtocol
 from ..interceptor import RequestInterceptor, ResponseInterceptor, InterceptedRequest, InterceptedResponse
 from ..encoding import ContentEncodingInterceptor
 from ..session import ProxySession
@@ -76,18 +79,54 @@ class ProxyServer:
         try:
             if config.ca_cert_path and config.ca_key_path:
                 try:
-                    # Initialize CA
-                    self._ca = CertificateAuthority(
-                        config.ca_cert_path,
-                        config.ca_key_path
-                    )
+                    # Initialize CA with absolute paths
+                    ca_cert_path = config.ca_cert_path.resolve()
+                    ca_key_path = config.ca_key_path.resolve()
+                    
+                    # Verify certificate files exist and are readable
+                    if not ca_cert_path.exists():
+                        logger.error(f"CA certificate not found: {ca_cert_path}")
+                        raise FileNotFoundError(f"CA certificate not found: {ca_cert_path}")
+                    if not ca_key_path.exists():
+                        logger.error(f"CA key not found: {ca_key_path}")
+                        raise FileNotFoundError(f"CA key not found: {ca_key_path}")
+                    
+                    # Check file permissions
+                    try:
+                        with open(ca_cert_path, 'rb') as f:
+                            cert_data = f.read()
+                        with open(ca_key_path, 'rb') as f:
+                            key_data = f.read()
+                    except PermissionError as e:
+                        logger.error(f"Permission denied accessing CA files: {e}")
+                        raise PermissionError(f"Cannot access CA files: {e}")
+                    except Exception as e:
+                        logger.error(f"Error reading CA files: {e}")
+                        raise
+                    
+                    # Validate certificate format
+                    try:
+                        from cryptography import x509
+                        from cryptography.hazmat.primitives import serialization
+                        x509.load_pem_x509_certificate(cert_data)
+                        serialization.load_pem_private_key(key_data, password=None)
+                    except Exception as e:
+                        logger.error(f"Invalid CA certificate or key format: {e}")
+                        raise ValueError(f"Invalid CA certificate or key format: {e}")
+                    
+                    logger.info(f"Initializing CA with cert={ca_cert_path}, key={ca_key_path}")
+                    self._ca = CertificateAuthority(ca_cert_path, ca_key_path)
+                    
                     # Configure cert manager with CA
                     cert_manager.set_ca(self._ca)
                     logger.info("Certificate Authority initialized successfully")
+                    
+                except FileNotFoundError as e:
+                    logger.error(f"CA file(s) not found: {e}")
+                    raise
                 except Exception as e:
-                    logger.warning(f"Certificate Authority initialization failed: {e}")
-                    logger.warning("Proxy will run without HTTPS interception capability")
-                    self._ca = None
+                    logger.error(f"Certificate Authority initialization failed: {e}")
+                    raise RuntimeError(f"Failed to initialize CA: {e}")
             else:
                 logger.info("No CA configuration provided - running without HTTPS interception")
         except Exception as e:
@@ -235,6 +274,23 @@ class ProxyServer:
             await asyncio.sleep(1)  # Brief pause to allow cleanup
 
             # Configure server
+            if self._ca:
+                # Initialize cert manager with CA
+                try:
+                    cert_manager.set_ca(self._ca)
+                    logger.info("Certificate manager initialized with CA")
+                except Exception as e:
+                    logger.error(f"Failed to initialize certificate manager: {e}")
+                    raise RuntimeError("Failed to initialize certificate manager") from e
+                
+                # Use HTTPS interception protocol when CA is available
+                protocol_factory = HttpsInterceptProtocol.create_protocol_factory()
+                logger.info("Using HTTPS interception protocol with CA")
+            else:
+                # Fallback to basic tunnel protocol
+                protocol_factory = lambda: TunnelProtocol
+                logger.info("Using basic tunnel protocol (no HTTPS interception)")
+
             config = uvicorn.Config(
                 app=self.create_asgi_app(),
                 host=self._host,
@@ -243,12 +299,13 @@ class ProxyServer:
                 server_header=False,
                 proxy_headers=False,
                 forwarded_allow_ips='*',
-                http=TunnelProtocol if not self._ca else HttpsInterceptProtocol.create_protocol_factory(),
-                timeout_keep_alive=30,  # Fixed timeout for better tunnel stability
+                http=protocol_factory,
+                timeout_keep_alive=30,
                 timeout_notify=1,
                 timeout_graceful_shutdown=3,
                 access_log=False,
-                use_colors=False
+                use_colors=False,
+                loop="asyncio"  # Use standard asyncio loop
             )
 
             # Create and start server

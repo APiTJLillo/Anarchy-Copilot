@@ -1,22 +1,4 @@
 services:
-  test:
-    build:
-      context: .
-      dockerfile: Dockerfile.test
-    volumes:
-      - .:/app
-      - test-cache:/root/.cache
-    env_file:
-      - .env
-    environment:
-      - PYTHONPATH=/app
-      - PYTHONDONTWRITEBYTECODE=1
-      - PYTHONUNBUFFERED=1
-      - PYTEST_ADDOPTS="-v"
-    command: python -m pytest tests/ -v
-    networks:
-      - anarchy
-
   dev:
     build:
       context: .
@@ -40,7 +22,7 @@ services:
       - ANARCHY_CORS_ORIGINS=http://localhost:3000
       # Proxy Settings
       - ANARCHY_PROXY_HOST=0.0.0.0
-      - ANARCHY_PROXY_PORT=8080
+      - ANARCHY_PROXY_PORT=8081
       - ANARCHY_PROXY_INTERCEPT_REQUESTS=true
       - ANARCHY_PROXY_INTERCEPT_RESPONSES=true
       - ANARCHY_PROXY_MAX_CONNECTIONS=100
@@ -75,7 +57,7 @@ services:
       - ANARCHY_CORS_ORIGINS=http://localhost:3000
       # Proxy Settings
       - ANARCHY_PROXY_HOST=0.0.0.0
-      - ANARCHY_PROXY_PORT=8080
+      - ANARCHY_PROXY_PORT=8081
       - ANARCHY_PROXY_INTERCEPT_REQUESTS=true
       - ANARCHY_PROXY_INTERCEPT_RESPONSES=true
       - ANARCHY_PROXY_MAX_CONNECTIONS=100
@@ -89,7 +71,10 @@ services:
       - 8.8.8.8 # Use Google's DNS
       - 1.1.1.1 # Use Cloudflare's DNS as backup
     command: >
-      python -m debugpy --listen 0.0.0.0:5679 -m uvicorn proxy.core:app --host 0.0.0.0 --port 8080 --reload --reload-delay 2 --log-level debug --proxy-headers --timeout-keep-alive 75 --forwarded-allow-ips '*' --lifespan on --use-colors
+      python -m debugpy --listen 0.0.0.0:5679 -m uvicorn proxy.server.asgi:app  --host 0.0.0.0  --port 8080  --reload  --reload-delay 2  --log-level debug  --proxy-headers  --timeout-keep-alive 75  --forwarded-allow-ips '*'  --lifespan on  --use-colors  --loop asyncio
+    ports:
+      - "8080:8080"
+      - "8081:8081"
 
   frontend:
     build:
@@ -102,7 +87,7 @@ services:
     environment:
       - NODE_ENV=development
       - REACT_APP_API_BASE_URL=http://localhost:8000
-      - REACT_APP_PROXY_URL=http://localhost:8080
+      - REACT_APP_PROXY_URL=http://localhost:8081
       - PORT=3000 # Set explicit port for React dev server
       - WDS_SOCKET_PORT=3000
     depends_on:
@@ -117,44 +102,16 @@ services:
       retries: 3
       start_period: 30s
 
-  nuclei:
-    image: projectdiscovery/nuclei:v2.9.0
-    volumes:
-      - ~/.nuclei:/root/.nuclei
-      - ./tests/data/nuclei_templates:/templates
-    command: -update-templates
-    networks:
-      - anarchy
-
-  validate:
-    build:
-      context: .
-      dockerfile: Dockerfile.test
-    volumes:
-      - .:/app
-      - ~/.nuclei:/root/.nuclei
-      - validate-cache:/root/.cache
-    environment:
-      - PYTHONPATH=/app:/app/anarchy-copilot
-      - PYTEST_ADDOPTS="-v --import-mode=append"
-    command: python -m pytest tests.tools.validate_templates -v --import-mode=append
-    networks:
-      - anarchy
-
 networks:
   anarchy:
     driver: bridge
 
 volumes:
-  test-cache:
-    name: anarchy-copilot_test-cache
   dev-cache:
     name: anarchy-copilot_dev-cache
   proxy-certs:
     name: anarchy-copilot_proxy-certs
   proxy-data:
     name: anarchy-copilot_proxy-data
-  validate-cache:
-    name: anarchy-copilot_validate-cache
   frontend-node-modules:
     name: anarchy-copilot_frontend-node-modules

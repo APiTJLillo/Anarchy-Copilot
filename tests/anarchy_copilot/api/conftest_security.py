@@ -30,7 +30,7 @@ async def secure_proxy_config(app: FastAPI) -> AsyncGenerator[Dict[str, Any], No
         # Start proxy with secure defaults
         response = await client.post("/api/proxy/start", json={
             "host": "127.0.0.1",
-            "port": 8080,  # Use secure port
+            "port": 8083,  # Use secure port
             "interceptRequests": True,
             "interceptResponses": True,
             "allowedHosts": ["httpbin.org"],
@@ -41,7 +41,7 @@ async def secure_proxy_config(app: FastAPI) -> AsyncGenerator[Dict[str, Any], No
         try:
             # Create proxy transport
             proxy_transport = AsyncHTTPTransport(
-                proxy="http://localhost:8080",
+                proxy="http://localhost:8083",
                 verify=False,
                 retries=1,
                 limits=Limits(max_connections=5, max_keepalive_connections=5)

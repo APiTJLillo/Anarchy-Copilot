@@ -182,7 +182,22 @@ start_services() {
         --reload \
         --log-level debug \
         --proxy-headers \
-        --timeout-keep-alive 75
+        --timeout-keep-alive 75 &
+    API_PID=$!
+
+    # Start the proxy in the background
+    python -m proxy.server &
+    PROXY_PID=$!
+
+    # Run the test script in the background after a short delay
+    (sleep 5 && /usr/local/bin/test-proxy.sh) &
+    TEST_PID=$!
+
+    # Wait for the proxy process
+    wait $PROXY_PID
+
+    # Wait for the API process
+    wait $API_PID
 }
 
 # Cleanup function

@@ -179,7 +179,7 @@ const ProxyDashboardContent: React.FC = () => {
       // Create a new session
       const newSession = await proxyApi.createSession("New Session", selectedProject, currentUser.id, {
         host: "127.0.0.1",
-        port: 8080,
+        port: 8083,
         interceptRequests: true,
         interceptResponses: true,
         allowedHosts: [],
@@ -193,7 +193,7 @@ const ProxyDashboardContent: React.FC = () => {
       // Start the proxy with the new session
       const settings: ProxySettings = {
         host: "127.0.0.1",
-        port: 8080,
+        port: 8083,
         interceptRequests: true,
         interceptResponses: true,
         allowedHosts: [],

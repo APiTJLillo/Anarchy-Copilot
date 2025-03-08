@@ -11,7 +11,6 @@ class SSLContextManager:
     """Manages SSL contexts for the proxy server with efficient resource handling."""
     
     def __init__(self, cert_path: str, key_path: str):
-        # Resolve and validate certificate paths
         self.cert_path = str(Path(cert_path).resolve())
         self.key_path = str(Path(key_path).resolve())
         self._ssl_contexts: Dict[str, ssl.SSLContext] = {}
@@ -88,35 +87,24 @@ class SSLContextManager:
                     del self._active_connections[hostname]
                     logger.debug(f"Removed unused SSL context for {hostname}")
                 except KeyError:
-                    pass  # Context was already removed
+                    pass
                     
-            # Force garbage collection after cleanup
             gc.collect()
 
     def cleanup_resources(self) -> None:
         """Release memory and cleanup resources."""
-        # Clear all contexts and connection tracking
         self._ssl_contexts.clear()
         self._active_connections.clear()
-        
-        # Clear certificate paths
         self.cert_path = None
         self.key_path = None
-        
-        # Force garbage collection
         gc.collect()
 
     def _load_cert_with_fallback(self) -> ssl.SSLContext:
         """Try to load certificate with different protocols."""
         errors = []
         
-        # Try different SSL/TLS protocol versions
-        for protocol in [
-            ssl.PROTOCOL_TLS,
-            ssl.PROTOCOL_TLS_SERVER,
-            ssl.PROTOCOL_TLSv1_2,
-            ssl.PROTOCOL_TLSv1
-        ]:
+        # Try different SSL/TLS protocol versions, start with most secure
+        for protocol in [ssl.PROTOCOL_TLS]:  # Only use TLS now for better compatibility
             try:
                 context = ssl.SSLContext(protocol)
                 context.load_cert_chain(self.cert_path, self.key_path)
@@ -148,7 +136,7 @@ class SSLContextManager:
         # Create new context
         try:
             context = self._load_cert_with_fallback()
-            self._configure_context(context, server_side=True)
+            self._configure_context(context, server_side=True, hostname=hostname)
             self._ssl_contexts[hostname] = context
             return context
             
@@ -158,35 +146,72 @@ class SSLContextManager:
 
     def create_server_context(self, hostname: str) -> ssl.SSLContext:
         """Create SSL context for connecting to target servers."""
+        if not hostname:
+            raise ValueError("Hostname is required for server context")
+            
         context = ssl.create_default_context(purpose=ssl.Purpose.SERVER_AUTH)
         self._configure_context(context, server_side=False, hostname=hostname)
+        
+        logger.debug(f"Created server context for {hostname} with SNI and verification enabled")
         return context
 
     def _configure_context(self, context: ssl.SSLContext, server_side: bool = True, hostname: Optional[str] = None) -> None:
         """Configure SSL context with appropriate security settings."""
         # Configure TLS versions
-        context.minimum_version = ssl.TLSVersion.TLSv1
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
         context.maximum_version = ssl.TLSVersion.TLSv1_3
 
-        # Configure verification
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE
+        # Configure session tickets and reuse
+        context.options |= ssl.OP_NO_TICKET  # Disable session tickets
+        context.options |= ssl.OP_NO_RENEGOTIATION  # Prevent renegotiation attacks
 
-        # Configure ALPN
-        try:
-            context.set_alpn_protocols(SSLConfig.ALPN_PROTOCOLS)
-        except (NotImplementedError, ssl.SSLError) as e:
-            logger.debug(f"ALPN not supported: {e}")
-
-        # Server-specific settings
         if server_side:
+            # Server mode settings
+            context.verify_mode = ssl.CERT_NONE
+            context.check_hostname = False
+            
+            # Server optimizations and security
             context.options |= ssl.OP_NO_COMPRESSION  # Prevent CRIME attack
             context.options |= ssl.OP_CIPHER_SERVER_PREFERENCE
             context.options |= ssl.OP_SINGLE_DH_USE
             context.options |= ssl.OP_SINGLE_ECDH_USE
-            context.post_handshake_auth = True
+            context.options |= getattr(ssl, 'OP_IGNORE_UNEXPECTED_EOF', 0)  # Ignore unexpected EOFs
+            context.options |= getattr(ssl, 'OP_NO_TLSv1_3_MIDDLEBOX_COMPAT', 0)  # Disable middlebox compat
+            
+            try:
+                context.set_alpn_protocols(['h2', 'http/1.1'])
+            except (NotImplementedError, ssl.SSLError) as e:
+                logger.debug(f"ALPN not supported in server mode: {e}")
+                
         else:
-            context.server_hostname = hostname
+            # Client mode settings
+            if not hostname:
+                raise ValueError("Hostname is required for client SSL context")
+                
+            context.check_hostname = True
+            context.verify_mode = ssl.CERT_REQUIRED
+            context.hostname = hostname  # For SNI
+            
+            try:
+                context.load_default_certs(purpose=ssl.Purpose.SERVER_AUTH)
+                logger.debug(f"Loaded default certificates for {hostname}")
+            except Exception as e:
+                logger.warning(f"Could not load default certificates: {e}")
+                context.verify_mode = ssl.CERT_NONE
+                context.check_hostname = False
+            
+            try:
+                context.set_alpn_protocols(['h2', 'http/1.1'])
+                logger.debug(f"ALPN protocols set for {hostname}")
+            except (NotImplementedError, ssl.SSLError) as e:
+                logger.debug(f"ALPN not supported in client mode: {e}")
+
+        # Set secure cipher list
+        context.set_ciphers('ECDHE+AESGCM:ECDHE+CHACHA20:DHE+AESGCM:DHE+CHACHA20')
+        
+        # Enable Perfect Forward Secrecy
+        context.options |= ssl.OP_SINGLE_ECDH_USE
+        context.options |= ssl.OP_SINGLE_DH_USE
 
     def remove_context(self, hostname: str) -> None:
         """Remove a context and decrement its connection count."""

@@ -33,7 +33,7 @@ services:
       context: .
       dockerfile: Dockerfile.test
     ports:
-      - "8080:8080" # Map proxy port for container access
+      - "8083:8083" # Map proxy port for container access
     volumes:
       - .:/app
       - ./test-results:/app/test-results

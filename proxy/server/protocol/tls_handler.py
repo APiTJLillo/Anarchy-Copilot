@@ -26,14 +26,7 @@ class _SslTransport(asyncio.Transport):
     """Basic SSL transport implementation for fallback mode."""
     
     def __init__(self, tls_handler: 'TlsHandler', loop: asyncio.AbstractEventLoop, ssl_sock: ssl.SSLSocket, protocol: asyncio.Protocol):
-        """Initialize SSL transport with robust socket access.
-        
-        Args:
-            tls_handler: The TLS handler managing this transport
-            loop: The event loop
-            ssl_sock: The SSL socket to wrap
-            protocol: The protocol to use
-        """
+        """Initialize SSL transport with robust socket access."""
         super().__init__()
         self._tls_handler = tls_handler
         self._loop = loop
@@ -41,407 +34,320 @@ class _SslTransport(asyncio.Transport):
         self._closing = False
         self._write_buffer = bytearray()
         
+        # Initialize write buffer limits
+        self._high_water = 64 * 1024  # 64 KiB default high-water mark
+        self._low_water = 16 * 1024   # 16 KiB default low-water mark
+        
         # Enhanced raw socket retrieval
         self._sock = None
         
-        # First try direct socket access if it's already a raw socket
-        if isinstance(ssl_sock, socket.socket) and not isinstance(ssl_sock, ssl.SSLSocket):
-            self._sock = ssl_sock
-        elif isinstance(ssl_sock, ssl.SSLSocket):
-            # For SSLSocket, try to get the underlying socket
-            if hasattr(ssl_sock, '_socket'):
-                self._sock = ssl_sock._socket
-            elif hasattr(ssl_sock, '_sock'):
-                self._sock = ssl_sock._sock
-            # Try unwrapping as last resort for SSLSocket
-            if not self._sock:
-                try:
-                    self._sock = ssl_sock.unwrap()
-                except Exception:
-                    pass
-        else:
-            # For other types (like transports), try various methods
-            for attr in ['_sock', '_socket', 'socket']:
-                try:
-                    sock = getattr(ssl_sock, attr, None)
-                    if isinstance(sock, socket.socket):
-                        self._sock = sock
-                        break
-                    # Handle TransportSocket wrapper
-                    if str(type(sock)) == "<class 'asyncio.trsock.TransportSocket'>" and hasattr(sock, '_sock'):
-                        self._sock = sock._sock
-                        break
-                except Exception:
-                    continue
-            
-            # If still no socket, try transport method
-            if not self._sock and hasattr(ssl_sock, 'get_extra_info'):
-                try:
-                    sock = ssl_sock.get_extra_info('socket')
-                    if isinstance(sock, socket.socket):
-                        self._sock = sock
-                    elif hasattr(sock, '_sock'):
-                        self._sock = sock._sock
-                except Exception:
-                    pass
-                    
-        if not self._sock:
-            logger.error("Failed to get raw socket from SSL socket")
-            logger.error(f"SSL socket type: {type(ssl_sock)}")
-            logger.error(f"Available attributes: {dir(ssl_sock)}")
-            raise RuntimeError("Could not get raw socket from SSL socket")
-            
-        # Validate socket
+        # Get raw socket with enhanced error handling
         try:
-            fileno = self._sock.fileno()
-            if fileno < 0:
-                raise RuntimeError("Socket has invalid file descriptor")
+            # First try direct socket access if it's already a raw socket
+            if isinstance(ssl_sock, socket.socket) and not isinstance(ssl_sock, ssl.SSLSocket):
+                self._sock = ssl_sock
+            elif isinstance(ssl_sock, ssl.SSLSocket):
+                # For SSLSocket, try multiple methods
+                if hasattr(ssl_sock, '_socket'):
+                    self._sock = ssl_sock._socket
+                elif hasattr(ssl_sock, '_sock'):
+                    self._sock = ssl_sock._sock
+                elif hasattr(ssl_sock, 'fileno'):
+                    try:
+                        fileno = ssl_sock.fileno()
+                        if fileno >= 0:
+                            self._sock = socket.fromfd(fileno, socket.AF_INET, socket.SOCK_STREAM)
+                    except (socket.error, IOError) as e:
+                        logger.error(f"Failed to get socket from fileno: {e}")
                 
-            # Test socket operations
-            self._sock.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE)
-            self._sock.getpeername()  # Verify connection
+                # Try unwrapping as last resort
+                if not self._sock:
+                    try:
+                        self._sock = ssl_sock.unwrap()
+                    except Exception as e:
+                        logger.error(f"Failed to unwrap SSL socket: {e}")
             
-            # Check socket error state
-            error_code = self._sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
-            if error_code != 0:
-                raise RuntimeError(f"Socket has pending error: {error_code}")
+            # If still no socket, try transport methods
+            if not self._sock:
+                for attr in ['_sock', '_socket', 'socket']:
+                    try:
+                        sock = getattr(ssl_sock, attr, None)
+                        if isinstance(sock, socket.socket):
+                            self._sock = sock
+                            break
+                        # Handle TransportSocket wrapper
+                        if str(type(sock)) == "<class 'asyncio.trsock.TransportSocket'>" and hasattr(sock, '_sock'):
+                            self._sock = sock._sock
+                            break
+                    except Exception:
+                        continue
+                
+                # Try transport's get_extra_info
+                if not self._sock and hasattr(ssl_sock, 'get_extra_info'):
+                    try:
+                        sock = ssl_sock.get_extra_info('socket')
+                        if isinstance(sock, socket.socket):
+                            self._sock = sock
+                        elif hasattr(sock, '_sock'):
+                            self._sock = sock._sock
+                    except Exception:
+                        pass
+                        
+            if not self._sock:
+                logger.error("Failed to get raw socket from SSL socket")
+                logger.error(f"SSL socket type: {type(ssl_sock)}")
+                logger.error(f"Available attributes: {dir(ssl_sock)}")
+                if isinstance(ssl_sock, ssl.SSLSocket):
+                    logger.error("SSLSocket details:")
+                    logger.error(f"  Server side: {ssl_sock.server_side}")
+                    logger.error(f"  Server hostname: {ssl_sock.server_hostname}")
+                    logger.error(f"  Session reused: {ssl_sock.session_reused}")
+                    logger.error(f"  Cipher: {ssl_sock.cipher()}")
+                    logger.error(f"  Version: {ssl_sock.version()}")
+                raise RuntimeError("Could not get raw socket from SSL socket")
+                
+            # Validate socket
+            try:
+                fileno = self._sock.fileno()
+                if fileno < 0:
+                    raise RuntimeError("Socket has invalid file descriptor")
+                    
+                # Test socket operations
+                self._sock.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE)
+                self._sock.getpeername()  # Verify connection
+                
+                # Check socket error state
+                error_code = self._sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR)
+                if error_code != 0:
+                    raise RuntimeError(f"Socket has pending error: {error_code}")
+            except Exception as e:
+                logger.error(f"Socket validation failed: {e}")
+                raise RuntimeError(f"Invalid socket: {e}")
+                
+            # Set socket to non-blocking mode
+            self._sock.setblocking(False)
+                
+            self._protocol = protocol
+            
+            # Initialize transport info with enhanced error handling
+            try:
+                self._extra = {
+                    'socket': self._sock,
+                    'ssl_object': ssl_sock,
+                    'peername': self._sock.getpeername(),
+                    'socket_family': self._sock.family,
+                    'socket_protocol': self._sock.proto,
+                    'cipher': ssl_sock.cipher() if isinstance(ssl_sock, ssl.SSLSocket) else None,
+                    'version': ssl_sock.version() if isinstance(ssl_sock, ssl.SSLSocket) else None,
+                    'socket_state': 'connected' if self._sock.fileno() >= 0 else 'closed',
+                    'bytes_sent': 0,
+                    'bytes_received': 0
+                }
+            except Exception as e:
+                logger.error(f"Failed to initialize transport info: {e}")
+                raise RuntimeError(f"Transport initialization failed: {e}")
+            
+            # Configure socket for optimal performance
+            try:
+                self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                self._sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 32768)
+                self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 32768)
+            except socket.error as e:
+                logger.warning(f"Could not set socket options: {e}")
+                
+            # Log successful initialization with connection details
+            logger.debug(f"SSL Transport initialized: version={self._extra.get('version')}, cipher={self._extra.get('cipher')}")
+            self._protocol.connection_made(self)
+            
+            # Start reading data
+            self._start_reading()
+            
         except Exception as e:
-            logger.error(f"Socket validation failed: {e}")
-            raise RuntimeError(f"Invalid socket: {e}")
-            
-        # Set socket to non-blocking mode
-        self._sock.setblocking(False)
-            
-        self._protocol = protocol
-        
-        # Initialize transport info with enhanced error handling
-        try:
-            self._extra = {
-                'socket': self._sock,
-                'ssl_object': ssl_sock,
-                'peername': self._sock.getpeername(),
-                'socket_family': self._sock.family,
-                'socket_protocol': self._sock.proto,
-                'cipher': ssl_sock.cipher() if isinstance(ssl_sock, ssl.SSLSocket) else None,
-                'version': ssl_sock.version() if isinstance(ssl_sock, ssl.SSLSocket) else None,
-                'socket_state': 'connected' if self._sock.fileno() >= 0 else 'closed',
-                'bytes_sent': 0,
-                'bytes_received': 0
-            }
-        except Exception as e:
-            logger.error(f"Failed to initialize transport info: {e}")
-            raise RuntimeError(f"Transport initialization failed: {e}")
-        
-        # Configure socket for optimal performance
-        try:
-            self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-            self._sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 32768)
-            self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 32768)
-        except socket.error as e:
-            logger.warning(f"Could not set socket options: {e}")
-            
-        # Log successful initialization with connection details
-        logger.debug(f"SSL Transport initialized: version={self._extra.get('version')}, cipher={self._extra.get('cipher')}")
-        self._protocol.connection_made(self)
-        
-        # Start reading data
-        self._start_reading()
+            logger.error(f"Failed to initialize SSL transport: {e}")
+            # Clean up resources
+            if hasattr(self, '_sock') and self._sock:
+                try:
+                    self._sock.close()
+                except Exception:
+                    pass
+            if ssl_sock:
+                try:
+                    ssl_sock.close()
+                except Exception:
+                    pass
+            raise RuntimeError(f"SSL transport initialization failed: {e}")
         
     def _start_reading(self) -> None:
-        """Start reading data from socket."""
+        """Start reading data from the socket."""
         if not self._closing:
             asyncio.create_task(self._read_loop())
             
     async def _read_loop(self) -> None:
-        """Continuously read data from socket with enhanced error recovery."""
-        BUFFER_SIZE = 32768  # 32KB buffer size
-        READ_TIMEOUT = 30.0  # Read timeout
-        MAX_EMPTY_READS = 5  # Maximum consecutive empty reads
-        empty_reads = 0
-        last_activity = time.monotonic()
-
+        """Read data from the socket in a loop."""
+        BUFFER_SIZE = 32768  # 32KB buffer
+        
         while not self._closing:
             try:
-                # Enhanced socket validation
+                # Get raw socket for reading
                 raw_sock = None
-                # Enhanced socket validation with type checking
-                try:
-                    # First unwrap any SSLSocket
-                    if isinstance(self._sock, ssl.SSLSocket):
-                        try:
-                            raw_sock = self._sock._sock
-                        except AttributeError:
-                            raw_sock = getattr(self._sock, '_socket', None)
-                        
-                        if not raw_sock:
-                            logger.error("Could not get raw socket from SSLSocket")
-                            break
-                    else:
-                        raw_sock = self._sock
-
-                    # Validate raw socket
-                    if not isinstance(raw_sock, socket.socket):
-                        logger.error(f"Invalid socket type: {type(raw_sock)}")
-                        break
-                        
-                    if raw_sock.fileno() < 0:
-                        logger.error("Socket is closed")
-                        break
-
-                    # Test socket state
+                if isinstance(self._sock, ssl.SSLSocket):
                     try:
-                        raw_sock.getsockopt(socket.SOL_SOCKET, socket.SO_TYPE)
-                        raw_sock.getpeername()  # Verify connection
-                    except (socket.error, IOError) as e:
-                        logger.error(f"Socket validation failed: {e}")
-                        break
-
-                except Exception as e:
-                    logger.error(f"Socket access error: {type(e).__name__}: {e}")
+                        raw_sock = self._sock._sock
+                    except AttributeError:
+                        raw_sock = getattr(self._sock, '_socket', None)
+                else:
+                    raw_sock = self._sock
+                    
+                if not raw_sock:
+                    logger.error("No raw socket available for reading")
                     break
-
-                # Safety check for SSL socket
+                    
+                # Check if socket is still valid
                 if not self._ssl_sock or getattr(self._ssl_sock, '_closed', True):
-                    logger.error("SSL socket is closed or invalid")
+                    logger.debug("SSL socket closed, stopping read loop")
                     break
-
-                # Read data with timeout and state tracking
+                    
+                # Wait for data to be available
                 try:
-                    async with async_timeout(READ_TIMEOUT):
-                        # Try non-blocking read
-                        try:
-                            import fcntl
-                            flags = fcntl.fcntl(raw_sock.fileno(), fcntl.F_GETFL)
-                            fcntl.fcntl(raw_sock.fileno(), fcntl.F_SETFL, flags | os.O_NONBLOCK)
-                            
-                            data = await self._loop.sock_recv(raw_sock, BUFFER_SIZE)
-                            
-                            if data:
-                                empty_reads = 0
-                                last_activity = time.monotonic()
-                            else:
-                                empty_reads += 1
-                                if empty_reads >= MAX_EMPTY_READS:
-                                    logger.debug("Maximum consecutive empty reads - closing connection")
-                                    break
-                                await asyncio.sleep(0.01)  # Small delay
-                                continue
-                                
-                            fcntl.fcntl(raw_sock, fcntl.F_SETFL, flags)  # Restore flags
-                            
-                        except (BlockingIOError, InterruptedError):
-                            await asyncio.sleep(0.01)
-                            continue
-                            
-                except asyncio.TimeoutError:
-                    elapsed = time.monotonic() - last_activity
-                    if elapsed > READ_TIMEOUT:
-                        logger.warning(f"Read timeout after {elapsed:.1f}s inactivity")
+                    await self._loop.sock_recv(raw_sock, 0)  # Wait for data
+                except (ConnectionError, socket.error) as e:
+                    if e.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
+                        logger.error(f"Socket error while waiting for data: {e}")
                         break
                     continue
-                except ConnectionError as e:
-                    logger.error(f"Connection error during read: {e}")
-                    break
-                
-                # Process SSL data
+                    
+                # Read data
+                try:
+                    data = await self._loop.sock_recv(raw_sock, BUFFER_SIZE)
+                    if not data:
+                        logger.debug("Connection closed by peer")
+                        break
+                except (ConnectionError, socket.error) as e:
+                    if e.errno not in (errno.EAGAIN, errno.EWOULDBLOCK):
+                        logger.error(f"Socket error while reading: {e}")
+                        break
+                    continue
+                    
+                # Process data through SSL
                 try:
                     ssl_sock = self._ssl_sock
-                    
-                    # Use a dedicated decryption method
-                    def decrypt_data(data: bytes) -> Optional[bytes]:
-                        try:
-                            if not data:
-                                return None
-                                
-                            decrypted = ssl_sock.recv(len(data))
-                            if not isinstance(decrypted, bytes):
-                                logger.error(f"Invalid decrypted data type: {type(decrypted)}")
-                                return None
-                                
-                            return decrypted
-                        except ssl.SSLError as e:
-                            if "renegotiation" in str(e).lower():
-                                logger.debug("Handling TLS renegotiation")
-                                ssl_sock.do_handshake()
-                                return None
-                            raise
-                            
-                    # Decrypt and process data
-                    decrypted = decrypt_data(data)
-                    if decrypted:
-                        # Update stats
-                        data_len = len(decrypted)
-                        self._extra['bytes_received'] += data_len
-                        logger.debug(f"Processed {data_len} bytes")
+                    if not isinstance(ssl_sock, ssl.SSLSocket):
+                        logger.error("SSL socket not available")
+                        break
                         
-                        # Monitor TLS state
+                    # Handle any pending handshake
+                    if not ssl_sock.server_side and not ssl_sock.session:
                         try:
-                            version = ssl_sock.version()
-                            cipher = ssl_sock.cipher()
-                            if cipher:
-                                logger.debug(f"Using {version}, cipher: {cipher[0]}")
-                        except Exception as e:
-                            logger.debug(f"Could not get SSL info: {e}")
-                            
-                        # Forward data if protocol available
-                        if self._protocol:
-                            try:
-                                self._protocol.data_received(decrypted)
-                            except Exception as e:
-                                logger.error(f"Protocol error: {e}")
-                                break
-                        else:
-                            logger.error("No protocol available")
-                            break
-                except ssl.SSLWantReadError:
-                    await asyncio.sleep(0.001)  # Small delay before retry
-                    continue
-                except ssl.SSLWantWriteError:
-                    # Handle write blocking with timeout
-                    try:
-                        async with async_timeout(1.0):
-                            await self.write_data(b'')  # Progress SSL state
-                    except asyncio.TimeoutError:
-                        logger.warning("SSL write operation timed out")
-                    continue
-                except ssl.SSLError as e:
-                    if "renegotiation" in str(e).lower():
-                        try:
-                            # Handle TLS renegotiation with timeout
-                            async with async_timeout(5.0):
-                                logger.debug("Handling TLS renegotiation request")
-                                self._ssl_sock.do_handshake()
+                            ssl_sock.do_handshake()
+                        except ssl.SSLWantReadError:
                             continue
-                        except Exception as re:
-                            logger.error(f"Renegotiation failed: {re}")
+                        except ssl.SSLError as e:
+                            logger.error(f"SSL handshake error: {e}")
                             break
-                    logger.error(f"SSL error in read loop: {e}")
-                    break
+                            
+                    # Decrypt data
+                    decrypted = b''
+                    try:
+                        decrypted = ssl_sock.recv(len(data))
+                    except ssl.SSLWantReadError:
+                        continue
+                    except ssl.SSLError as e:
+                        logger.error(f"SSL decryption error: {e}")
+                        break
+                        
+                    # Update stats
+                    data_len = len(decrypted)
+                    if data_len > 0:
+                        self._extra['bytes_received'] += data_len
+                        
+                    # Pass decrypted data to protocol
+                    if self._protocol:
+                        try:
+                            self._protocol.data_received(decrypted)
+                        except Exception as e:
+                            logger.error(f"Protocol error while handling data: {e}")
+                            break
+                            
                 except Exception as e:
-                    logger.error(f"Unexpected error processing SSL data: {e}")
+                    logger.error(f"Error processing SSL data: {e}")
                     break
                     
             except Exception as e:
-                if isinstance(e, (ConnectionError, ConnectionResetError)):
-                    logger.debug(f"Connection closed: {e}")
-                else:
-                    logger.error(f"Error in read loop: {type(e).__name__}: {e}")
+                logger.error(f"Unexpected error in read loop: {e}")
                 break
                 
-        # Connection is closed
-        logger.debug("Read loop ended")
+        # Clean up when loop ends
         if not self._closing:
             self._closing = True
             self._protocol.connection_lost(None)
 
-    def write(self, data: Union[bytes, bytearray, memoryview]) -> None:
-        """Write data to transport."""
+    def write(self, data: bytes) -> None:
+        """Write data to the transport."""
         if self._closing:
             return
             
-        try:
-            # Create task for async write
-            asyncio.create_task(self.write_data(bytes(data)))
-        except Exception as e:
-            logger.error(f"Error creating write task: {e}")
-            self.close()
-
-    async def write_data(self, data: bytes) -> None:
-        """Write data with TLS renegotiation handling."""
-        WRITE_TIMEOUT = 30.0  # Write timeout in seconds
-        CHUNK_SIZE = 16384  # 16KB chunks for better performance
-        
-        if not data:
+        if not self._sock or self._sock.fileno() < 0:
+            return
+            
+        if not self._ssl_sock or getattr(self._ssl_sock, '_closed', True):
             return
             
         try:
-            # Validate socket and SSL state
-            if not self._sock or self._sock.fileno() < 0:
-                raise RuntimeError("Invalid socket in write operation")
-            if not self._ssl_sock or getattr(self._ssl_sock, '_closed', True):
-                raise RuntimeError("SSL socket is closed or invalid")
-                
-            # Process data in chunks
-            remaining = data
-            while remaining:
-                chunk = remaining[:CHUNK_SIZE]
-                chunk_size = len(chunk)
-                
+            # Write data through SSL
+            chunk = data
+            while chunk:
                 try:
-                    async with async_timeout(WRITE_TIMEOUT):
-                        while chunk:
-                            try:
-                                # Attempt to send data
-                                sent = self._ssl_sock.send(chunk)
-                                if sent > 0:
-                                    self._extra['bytes_sent'] += sent
-                                    chunk = chunk[sent:]
-                                else:
-                                    # No progress - small delay before retry
-                                    await asyncio.sleep(0.001)
-                                    
-                            except ssl.SSLWantReadError:
-                                # Wait for read availability
-                                await asyncio.sleep(0.001)
-                                continue
-                                
-                            except ssl.SSLWantWriteError:
-                                # Wait for write availability
-                                await asyncio.sleep(0.001)
-                                continue
-                                
-                            except ssl.SSLError as e:
-                                if "renegotiation" in str(e).lower():
-                                    try:
-                                        # Handle TLS renegotiation with timeout
-                                        async with async_timeout(5.0):
-                                            logger.debug("Handling TLS renegotiation during write")
-                                            self._ssl_sock.do_handshake()
-                                        continue
-                                    except Exception as re:
-                                        logger.error(f"Write renegotiation failed: {re}")
-                                        self.close()
-                                        raise ssl.SSLError(f"Renegotiation failed: {re}")
-                                raise
-                                
-                except asyncio.TimeoutError:
-                    logger.error(f"Write operation timed out after {WRITE_TIMEOUT}s")
-                    raise
+                    sent = self._ssl_sock.send(chunk)
+                    if sent > 0:
+                        self._extra['bytes_sent'] += sent
+                        chunk = chunk[sent:]
+                    else:
+                        break
+                except ssl.SSLWantWriteError:
+                    # Would block, try again later
+                    continue
+                except ssl.SSLWantReadError:
+                    # Need to complete handshake
+                    try:
+                        self._ssl_sock.do_handshake()
+                    except (ssl.SSLWantReadError, ssl.SSLWantWriteError):
+                        continue
+                    except Exception as e:
+                        logger.error(f"Handshake error during write: {e}")
+                        break
+                except Exception as e:
+                    logger.error(f"Error writing data: {e}")
+                    break
                     
-                # Move to next chunk
-                remaining = remaining[chunk_size:]
         except Exception as e:
-            logger.error(f"Error in write_data: {type(e).__name__}: {e}")
+            logger.error(f"Write error: {e}")
             self.close()
-            if isinstance(e, ssl.SSLError):
-                # Log detailed SSL error information
-                error_info = {
-                    'error_type': type(e).__name__,
-                    'error_number': getattr(e, 'errno', 'unknown'),
-                    'ssl_lib': getattr(e, 'library', 'unknown'),
-                    'reason': getattr(e, 'reason', 'unknown')
-                }
-                logger.error(f"SSL error details: {error_info}")
-            raise
 
     def close(self) -> None:
         """Close the transport."""
         if not self._closing:
             self._closing = True
+            
+            # Clean up SSL
             try:
-                # Attempt graceful SSL shutdown
                 self._ssl_sock.unwrap()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"SSL unwrap error: {e}")
+                
+            # Shutdown socket
             try:
                 self._sock.shutdown(socket.SHUT_RDWR)
-            except Exception:
-                pass  # Socket might be closed already
+            except Exception as e:
+                logger.debug(f"Socket shutdown error: {e}")
+                
+            # Close socket
             try:
                 self._sock.close()
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"Socket close error: {e}")
+                
+            # Notify protocol
             self._protocol.connection_lost(None)
 
     def abort(self) -> None:
@@ -449,7 +355,7 @@ class _SslTransport(asyncio.Transport):
         self.close()
 
     def get_extra_info(self, name: str, default: Any = None) -> Any:
-        """Get transport extra information."""
+        """Get transport information."""
         return self._extra.get(name, default)
 
     def is_closing(self) -> bool:
@@ -466,7 +372,16 @@ class _SslTransport(asyncio.Transport):
 
     def set_write_buffer_limits(self, high: Optional[int] = None, low: Optional[int] = None) -> None:
         """Set write buffer limits."""
-        pass  # Not implemented for fallback mode
+        if high is None:
+            high = 64 * 1024  # Default high-water limit is 64 KiB
+        if low is None:
+            low = high // 4  # Default low-water limit is 1/4 of high-water
+            
+        if high < 0 or low < 0 or low > high:
+            raise ValueError(f"high ({high}) must be >= low ({low}) must be >= 0")
+            
+        self._high_water = high
+        self._low_water = low
 
     def get_write_buffer_size(self) -> int:
         """Get current write buffer size."""
@@ -502,66 +417,94 @@ class TlsHandler:
         """Get the raw socket from an SSL socket or transport."""
         try:
             # Case 1: Already a raw socket
-            if isinstance(ssl_sock, socket.socket):
+            if isinstance(ssl_sock, socket.socket) and not isinstance(ssl_sock, ssl.SSLSocket):
                 return ssl_sock
 
-            # Case 2: SSL Socket handling
-            if isinstance(ssl_sock, ssl.SSLSocket):
-                # Try getting through _socket attribute (Python 3.10+)
-                if hasattr(ssl_sock, '_socket'):
-                    sock = getattr(ssl_sock, '_socket')
-                    if isinstance(sock, socket.socket):
-                        return sock
-                
-                # Try getting through the SSLObject's raw socket
-                if hasattr(ssl_sock, '_sslobj') and ssl_sock._sslobj is not None:
-                    raw_socket = getattr(ssl_sock._sslobj, '_sslobj', None)
-                    if isinstance(raw_socket, socket.socket):
-                        return raw_socket
-
-                # Try unwrapping
-                try:
-                    return ssl_sock.unwrap()
-                except (ssl.SSLError, OSError):
-                    pass
-
-                # Try getting through fileno
-                if hasattr(ssl_sock, 'fileno'):
-                    fileno = ssl_sock.fileno()
-                    if fileno != -1:
-                        return socket.fromfd(fileno, socket.AF_INET, socket.SOCK_STREAM)
-
-            # Case 3: Transport object handling
+            # Case 2: Transport object handling (check this first)
             if hasattr(ssl_sock, 'get_extra_info'):
                 sock = ssl_sock.get_extra_info('socket')
                 if isinstance(sock, socket.socket):
                     return sock
-                
-            # Case 4: _SelectorSocketTransport handling
-            transport_type = type(ssl_sock).__name__
-            if transport_type == '_SelectorSocketTransport':
-                # Try multiple known attributes
-                for attr in ['_socket', '_sock', 'socket']:
-                    if hasattr(ssl_sock, attr):
-                        sock = getattr(ssl_sock, attr)
-                        if isinstance(sock, socket.socket):
-                            return sock
-                
-                # Try get_extra_info if available
-                if hasattr(ssl_sock, 'get_extra_info'):
-                    sock = ssl_sock.get_extra_info('socket')
+                    
+            # Case 3: SSL Socket handling
+            if isinstance(ssl_sock, ssl.SSLSocket):
+                # Try getting through _socket attribute first
+                if hasattr(ssl_sock, '_socket'):
+                    sock = ssl_sock._socket
                     if isinstance(sock, socket.socket):
                         return sock
+                    
+                # Try getting through _sock attribute
+                if hasattr(ssl_sock, '_sock'):
+                    sock = ssl_sock._sock
+                    if isinstance(sock, socket.socket):
+                        return sock
+                    
+                # Try getting through fileno
+                try:
+                    fileno = ssl_sock.fileno()
+                    if fileno >= 0:
+                        sock = socket.fromfd(fileno, socket.AF_INET, socket.SOCK_STREAM)
+                        if isinstance(sock, socket.socket):
+                            return sock
+                except (socket.error, IOError):
+                    pass
 
-            # Log available attributes for debugging
-            logger.error(f"Failed to get raw socket from {type(ssl_sock)}")
-            logger.error(f"Available attributes: {dir(ssl_sock)}")
+                # Try getting through SSLObject
+                if hasattr(ssl_sock, '_sslobj'):
+                    sslobj = ssl_sock._sslobj
+                    if hasattr(sslobj, '_sslobj'):
+                        sock = getattr(sslobj, '_sslobj', None)
+                        if isinstance(sock, socket.socket):
+                            return sock
+
+            # Case 4: Try getting socket from transport attributes
+            for attr in ['_socket', '_sock', 'socket', 'transport']:
+                if hasattr(ssl_sock, attr):
+                    sock = getattr(ssl_sock, attr)
+                    if isinstance(sock, socket.socket):
+                        return sock
+                    # Handle nested transport case
+                    if hasattr(sock, 'get_extra_info'):
+                        inner_sock = sock.get_extra_info('socket')
+                        if isinstance(inner_sock, socket.socket):
+                            return inner_sock
+
+            # Case 5: Try unwrapping if it's an SSL socket
+            if isinstance(ssl_sock, ssl.SSLSocket):
+                try:
+                    sock = ssl_sock.unwrap()
+                    if isinstance(sock, socket.socket):
+                        return sock
+                except (ssl.SSLError, OSError):
+                    pass
+
+            # Case 6: Try getting through transport's protocol
+            if hasattr(ssl_sock, '_protocol'):
+                protocol = getattr(ssl_sock, '_protocol')
+                if hasattr(protocol, 'transport'):
+                    transport = protocol.transport
+                    if hasattr(transport, 'get_extra_info'):
+                        sock = transport.get_extra_info('socket')
+                        if isinstance(sock, socket.socket):
+                            return sock
+
+            # Log failure details with more context
+            logger.error(f"[{self._connection_id}] Failed to get raw socket from {type(ssl_sock)}")
+            logger.error(f"[{self._connection_id}] Available attributes: {dir(ssl_sock)}")
+            if isinstance(ssl_sock, ssl.SSLSocket):
+                logger.error(f"[{self._connection_id}] SSLSocket details:")
+                logger.error(f"  - Server side: {ssl_sock.server_side}")
+                logger.error(f"  - Server hostname: {ssl_sock.server_hostname}")
+                logger.error(f"  - Session reused: {ssl_sock.session_reused}")
+                logger.error(f"  - Cipher: {ssl_sock.cipher()}")
+                logger.error(f"  - Version: {ssl_sock.version()}")
             
             raise RuntimeError(f"Could not extract raw socket from {type(ssl_sock)}")
             
         except Exception as e:
-            logger.error(f"Error extracting raw socket: {e}")
-            raise RuntimeError(f"Could not extract raw socket from {type(ssl_sock)}: {str(e)}")
+            logger.error(f"[{self._connection_id}] Error extracting raw socket: {e}")
+            raise RuntimeError(f"Could not extract raw socket: {str(e)}")
 
     def __init__(self, connection_id: str, state_manager: Any, error_handler: Any,
                  loop: Optional[asyncio.AbstractEventLoop] = None):
@@ -582,6 +525,26 @@ class TlsHandler:
         # Socket management
         self._stored_sockets: Dict[int, socket.socket] = {}
         self._socket_states: Dict[int, Dict[str, Any]] = {}
+        self._transports: Dict[int, asyncio.Transport] = {}
+        self._max_retries = 3
+        self._retry_delay = 0.5
+        
+        # SSL/TLS state
+        self._ssl_sock = None
+        self._sock = None
+        self._protocol = None
+        self._closing = False
+        self._write_buffer = bytearray()
+        self._extra = {
+            'socket': None,
+            'ssl_object': None,
+            'peername': None,
+            'socket_family': None,
+            'socket_protocol': None,
+            'socket_state': 'initializing',
+            'bytes_sent': 0,
+            'bytes_received': 0
+        }
         
         logger.debug(f"[{connection_id}] Initialized TLS handler with socket tracking")
         
@@ -590,25 +553,78 @@ class TlsHandler:
                          alpn_protocols: Optional[list[str]] = None) -> Tuple[asyncio.Transport, TlsCapableProtocol]:
         """Wrap client connection with TLS."""
         try:
-            logger.debug(f"[{self._connection_id}] Wrapping client connection for {server_hostname}")
-            # Get client context
-            ssl_context = get_client_context(server_hostname)
-            if alpn_protocols:
-                ssl_context.set_alpn_protocols(alpn_protocols)
-                
-            # Create SSL transport
-            transport = await self._create_ssl_transport(
-                protocol,
-                ssl_context,
-                server_side=False,
-                server_hostname=server_hostname
-            )
+            logger.debug(f"[{self._connection_id}] Starting client wrap for {server_hostname}")
             
-            logger.debug(f"[{self._connection_id}] Client connection wrapped successfully")
+            # Log protocol state
+            logger.debug(f"[{self._connection_id}] Protocol type: {type(protocol)}")
+            logger.debug(f"[{self._connection_id}] Protocol transport: {type(protocol.transport) if protocol.transport else None}")
+            
+            # Get client context
+            try:
+                ssl_context = get_client_context(server_hostname)
+                logger.debug(
+                    f"[{self._connection_id}] Created client SSL context - "
+                    f"Protocol: {ssl_context.protocol}, "
+                    f"Options: {ssl_context.options}, "
+                    f"Verify mode: {ssl_context.verify_mode}"
+                )
+            except Exception as e:
+                logger.error(f"[{self._connection_id}] Failed to create client SSL context: {e}", exc_info=True)
+                raise
+                
+            # Configure ALPN if specified
+            if alpn_protocols:
+                try:
+                    ssl_context.set_alpn_protocols(alpn_protocols)
+                    logger.debug(f"[{self._connection_id}] Set ALPN protocols: {alpn_protocols}")
+                except Exception as e:
+                    logger.warning(f"[{self._connection_id}] Failed to set ALPN protocols: {e}")
+                
+            # Create SSL transport with detailed error handling
+            try:
+                logger.debug(f"[{self._connection_id}] Creating SSL transport with handshake timeout of 30s")
+                transport = await self._create_ssl_transport(
+                    protocol,
+                    ssl_context,
+                    server_side=False,
+                    server_hostname=server_hostname,
+                    handshake_timeout=30.0
+                )
+                
+                # Verify transport creation
+                if not transport:
+                    raise RuntimeError("SSL transport creation failed - transport is None")
+                    
+                # Log transport state
+                logger.debug(
+                    f"[{self._connection_id}] Transport created successfully - "
+                    f"Type: {type(transport)}, "
+                    f"Is closing: {transport.is_closing()}, "
+                    f"Has SSL: {transport.get_extra_info('ssl_object') is not None}"
+                )
+                
+                # Get SSL info
+                ssl_obj = transport.get_extra_info('ssl_object')
+                if ssl_obj:
+                    logger.debug(
+                        f"[{self._connection_id}] SSL connection info - "
+                        f"Version: {ssl_obj.version()}, "
+                        f"Cipher: {ssl_obj.cipher()}, "
+                        f"Server hostname: {ssl_obj.server_hostname}, "
+                        f"Compression: {ssl_obj.compression()}"
+                    )
+                else:
+                    logger.warning(f"[{self._connection_id}] No SSL object available in transport")
+                
+            except Exception as e:
+                logger.error(f"[{self._connection_id}] Failed to create SSL transport: {e}", exc_info=True)
+                raise
+            
+            logger.debug(f"[{self._connection_id}] Client wrap completed successfully")
             return transport, protocol
             
         except Exception as e:
-            logger.error(f"[{self._connection_id}] Failed to wrap client connection: {e}")
+            logger.error(f"[{self._connection_id}] Failed to wrap client connection: {e}", exc_info=True)
             raise
 
     async def wrap_server(self, protocol: TlsCapableProtocol,
@@ -617,20 +633,23 @@ class TlsHandler:
         """Wrap server connection with TLS."""
         try:
             logger.debug(f"[{self._connection_id}] Wrapping server connection")
-            # Get server context
-            ssl_context = get_server_context(server_hostname)
+            
+            # Create server context
+            ssl_context = get_server_context(server_hostname) if server_hostname else ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+            ssl_context.verify_mode = ssl.CERT_NONE
+            
+            # Configure ALPN if specified
             if alpn_protocols:
                 ssl_context.set_alpn_protocols(alpn_protocols)
-                
-            # Create SSL transport with server hostname
+            
+            # Create SSL transport without server_hostname (server mode)
             transport = await self._create_ssl_transport(
-                protocol,
-                ssl_context,
-                server_side=True,
-                server_hostname=server_hostname
+                protocol=protocol,
+                ssl_context=ssl_context,
+                server_side=True,  # Explicitly set server side
+                handshake_timeout=30.0
             )
             
-            logger.debug(f"[{self._connection_id}] Server connection wrapped successfully")
             return transport, protocol
             
         except Exception as e:
@@ -643,38 +662,112 @@ class TlsHandler:
                                   server_side: bool = False,
                                   server_hostname: Optional[str] = None,
                                   handshake_timeout: float = 30.0) -> asyncio.Transport:
-        """Create SSL transport with optional delayed handshake for MITM debugging.
-        
-        Note: This intentionally uses behavior from Python <3.10.13 for MITM debugging.
-        Do not use in production environments.
-        """
+        """Create SSL transport with optional delayed handshake for MITM debugging."""
         try:
-            # Get the raw socket from the protocol's transport
-            raw_socket = self._get_raw_socket(protocol.transport)
-            
-            # Set non-blocking mode
-            raw_socket.setblocking(False)
-            
-            # Create SSL socket without immediate handshake
-            ssl_sock = ssl_context.wrap_socket(
-                raw_socket,
-                server_side=server_side,
-                server_hostname=server_hostname,
-                do_handshake_on_connect=False  # Key for pre-3.10.13 behavior
+            logger.debug(
+                f"[{self._connection_id}] Creating SSL transport - "
+                f"Server side: {server_side}, "
+                f"Server hostname: {server_hostname}, "
+                f"Timeout: {handshake_timeout}s"
             )
             
+            # Get raw socket from protocol transport
+            try:
+                raw_socket = self._get_raw_socket(protocol.transport)
+                if not raw_socket:
+                    raise RuntimeError("Could not get raw socket from transport")
+                    
+                logger.debug(
+                    f"[{self._connection_id}] Got raw socket - "
+                    f"Type: {type(raw_socket)}, "
+                    f"Family: {raw_socket.family}, "
+                    f"Type: {raw_socket.type}, "
+                    f"Proto: {raw_socket.proto}, "
+                    f"Fileno: {raw_socket.fileno()}, "
+                    f"Blocking: {raw_socket.getblocking()}"
+                )
+            except Exception as e:
+                logger.error(f"[{self._connection_id}] Failed to get raw socket: {e}", exc_info=True)
+                raise
+            
+            # Track socket state
+            socket_id = id(raw_socket)
+            self._socket_states[socket_id] = {
+                'created_at': time.time(),
+                'server_side': server_side,
+                'server_hostname': server_hostname if not server_side else None,
+                'handshake_timeout': handshake_timeout
+            }
+            
+            # Create new SSL socket without immediate handshake
+            try:
+                wrap_kwargs = {
+                    'sock': raw_socket,
+                    'server_side': server_side,
+                    'do_handshake_on_connect': False
+                }
+                
+                # Only add server_hostname for client-side connections
+                if not server_side and server_hostname:
+                    wrap_kwargs['server_hostname'] = server_hostname
+                    
+                logger.debug(f"[{self._connection_id}] Wrapping socket with SSL - kwargs: {wrap_kwargs}")
+                ssl_sock = ssl_context.wrap_socket(**wrap_kwargs)
+                
+                # Set non-blocking mode
+                ssl_sock.setblocking(False)
+                logger.debug(f"[{self._connection_id}] SSL socket created and set to non-blocking mode")
+                
+            except Exception as e:
+                logger.error(f"[{self._connection_id}] Failed to create SSL socket: {e}", exc_info=True)
+                raise
+                
+            # Perform SSL handshake
+            try:
+                logger.debug(f"[{self._connection_id}] Starting SSL handshake")
+                await self._do_handshake(ssl_sock, self._loop)
+                logger.debug(f"[{self._connection_id}] SSL handshake completed successfully")
+                
+                # Log SSL connection info
+                logger.debug(
+                    f"[{self._connection_id}] SSL connection established - "
+                    f"Version: {ssl_sock.version()}, "
+                    f"Cipher: {ssl_sock.cipher()}, "
+                    f"Compression: {ssl_sock.compression()}"
+                )
+                
+            except Exception as e:
+                logger.error(f"[{self._connection_id}] SSL handshake failed: {e}", exc_info=True)
+                raise
+            
             # Create transport with the SSL socket
-            transport = _SslTransport(self, self._loop, ssl_sock, protocol)
-            
-            # Store for cleanup
-            self._transports[id(transport)] = transport
-            
-            return transport
+            try:
+                transport = _SslTransport(
+                    tls_handler=self,
+                    loop=self._loop,
+                    ssl_sock=ssl_sock,
+                    protocol=protocol
+                )
+                
+                # Store transport for cleanup
+                self._transports[id(transport)] = transport
+                
+                # Update state
+                self._state_manager.tls_state.update(
+                    connection_state="ssl_transport_created",
+                    server_side=server_side,
+                    server_hostname=server_hostname if not server_side else None
+                )
+                
+                logger.debug(f"[{self._connection_id}] SSL transport created successfully")
+                return transport
+                
+            except Exception as e:
+                logger.error(f"[{self._connection_id}] Failed to create transport: {e}", exc_info=True)
+                raise
             
         except Exception as e:
-            logging.error(f"Failed to create SSL transport: {e}")
-            if 'ssl_sock' in locals():
-                ssl_sock.close()
+            logger.error(f"[{self._connection_id}] Failed to create SSL transport: {e}", exc_info=True)
             raise
 
     def update_connection_stats(self, connection_id: str, **kwargs) -> None:
@@ -688,37 +781,41 @@ class TlsHandler:
         return self._connection_stats.copy()
 
     def close_connection(self, connection_id: str) -> None:
-        """Close and cleanup connection resources with improved error handling."""
-        try:
-            # Clean up socket tracking
-            for sock_id, socket in list(self._stored_sockets.items()):
-                try:
-                    # Check if socket is still valid
-                    if socket.fileno() >= 0:
-                        socket.shutdown(socket.SHUT_RDWR)
-                    socket.close()
-                except (socket.error, IOError):
-                    pass  # Ignore errors during cleanup
-                finally:
-                    self._stored_sockets.pop(sock_id, None)
-                    self._socket_states.pop(sock_id, None)
-
-            # Clean up connection stats
-            self._connection_stats.pop(connection_id, None)
-            logger.debug(f"[{connection_id}] Connection resources cleaned up")
-
-        except Exception as e:
-            logger.error(f"[{connection_id}] Error during connection cleanup: {e}")
+        """Close and cleanup a connection."""
+        logger.debug(f"[{connection_id}] Closing connection")
+        
+        # Clean up any transports associated with this connection
+        for transport_id, transport in list(self._transports.items()):
+            if transport and not transport.is_closing():
+                transport.close()
+            self._transports.pop(transport_id, None)
+            
+        # Clean up any sockets
+        for sock_id, socket in list(self._stored_sockets.items()):
+            try:
+                socket.close()
+            except Exception as e:
+                logger.debug(f"[{connection_id}] Error closing socket: {e}")
+            self._stored_sockets.pop(sock_id, None)
+            self._socket_states.pop(sock_id, None)
+            
+        # Clean up connection stats
+        self._connection_stats.pop(connection_id, None)
+        
+        logger.debug(f"[{connection_id}] Connection cleanup complete")
 
     async def establish_tls_tunnel(self, host: str, port: int, 
                                  client_transport: asyncio.Transport,
                                  connection_id: str) -> Tuple[bool, Optional[asyncio.Transport]]:
         """Establish TLS tunnel with server and client using MITM handshake."""
         try:
+            logger.info(f"[{connection_id}] Starting TLS tunnel establishment to {host}:{port}")
+            
             # Create connection handler
             remote_handler = ConnectionHandler(f"{connection_id}_remote")
             
             # Connect to remote server
+            logger.debug(f"[{connection_id}] Attempting to connect to remote server")
             transport = await self._loop.create_connection(
                 lambda: remote_handler,
                 host=host,
@@ -726,13 +823,99 @@ class TlsHandler:
             )
             
             if not transport or not transport[0]:
+                logger.error(f"[{connection_id}] Failed to establish remote connection")
                 raise RuntimeError("Failed to establish remote connection")
                 
+            logger.info(f"[{connection_id}] Successfully connected to remote server")
+            
+            # Start TLS handshake
+            logger.debug(f"[{connection_id}] Starting TLS handshake")
+            success = await self._perform_tls_handshake(transport[0], host)
+            
+            if not success:
+                logger.error(f"[{connection_id}] TLS handshake failed")
+                return False, None
+                
+            logger.info(f"[{connection_id}] TLS tunnel established successfully")
             return True, transport[0]
             
         except Exception as e:
-            logger.error(f"Failed to establish TLS tunnel: {e}")
+            logger.error(f"[{connection_id}] Failed to establish TLS tunnel: {str(e)}")
             return False, None
+
+    async def _perform_tls_handshake(self, transport: asyncio.Transport, host: str) -> bool:
+        """Perform TLS handshake with enhanced logging and error recovery."""
+        start_time = time.time()
+        retry_count = 0
+        
+        while retry_count < self._max_retries:
+            try:
+                logger.debug(f"[{self._connection_id}] TLS handshake attempt {retry_count + 1}")
+                
+                # Get socket info for debugging
+                sock = transport.get_extra_info('socket')
+                if sock:
+                    try:
+                        blocking = not sock.getsockopt(socket.SOL_SOCKET, socket.SO_NONBLOCK)
+                        logger.debug(f"[{self._connection_id}] Socket state: blocking={blocking}")
+                    except Exception as e:
+                        logger.warning(f"[{self._connection_id}] Could not get socket state: {e}")
+                
+                # Create SSL context
+                ssl_context = get_client_context(host)
+                logger.debug(f"[{self._connection_id}] Created SSL context for {host}")
+                
+                # Perform handshake
+                async with async_timeout(self._handshake_timeout):
+                    # Wrap socket with SSL
+                    ssl_sock = ssl_context.wrap_socket(
+                        sock,
+                        server_hostname=host,
+                        do_handshake_on_connect=False
+                    )
+                    
+                    logger.debug(f"[{self._connection_id}] Starting SSL handshake")
+                    ssl_sock.do_handshake()
+                    
+                    # Log successful handshake details
+                    cipher = ssl_sock.cipher()
+                    version = ssl_sock.version()
+                    logger.info(
+                        f"[{self._connection_id}] TLS handshake successful:\n"
+                        f"  Protocol: {version}\n"
+                        f"  Cipher: {cipher}\n"
+                        f"  Time taken: {time.time() - start_time:.2f}s"
+                    )
+                    
+                    return True
+                    
+            except asyncio.TimeoutError:
+                duration = time.time() - start_time
+                logger.error(f"[{self._connection_id}] Handshake timeout after {duration:.2f}s")
+                self._last_error = "Handshake timeout"
+                
+            except ssl.SSLError as e:
+                logger.error(f"[{self._connection_id}] SSL error during handshake: {e}")
+                if "WRONG_VERSION_NUMBER" in str(e):
+                    logger.error(f"[{self._connection_id}] Protocol version mismatch")
+                    break  # Don't retry on protocol version mismatch
+                self._last_error = f"SSL error: {str(e)}"
+                
+            except Exception as e:
+                logger.error(f"[{self._connection_id}] Unexpected error during handshake: {e}")
+                self._last_error = f"Unexpected error: {str(e)}"
+            
+            retry_count += 1
+            if retry_count < self._max_retries:
+                delay = self._retry_delay * (2 ** retry_count)
+                logger.info(f"[{self._connection_id}] Retrying handshake in {delay:.1f}s")
+                await asyncio.sleep(delay)
+        
+        logger.error(
+            f"[{self._connection_id}] TLS handshake failed after {retry_count} attempts. "
+            f"Last error: {self._last_error}"
+        )
+        return False
 
     def _create_ssl_contexts(self, cert_hostname: str) -> Tuple[ssl.SSLContext, ssl.SSLContext]:
         """Create SSL contexts for local and remote connections with OpenSSL 3.0 compatibility."""
@@ -832,7 +1015,7 @@ class TlsHandler:
                     if not w:
                         continue
                 except (socket.error, IOError) as e:
-                    if e.errno in (errno.EAGAIN, errno.EWOULDBLOCK, errno.EINPROGRESS):
+                    if e.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
                         await asyncio.sleep(0.01)
                         continue
                     raise
@@ -1319,3 +1502,30 @@ class TlsHandler:
                 version=ssl_object.version(),
                 alpn_protocols=ssl_object.selected_alpn_protocol()
             )
+
+    def cleanup(self) -> None:
+        """Clean up all resources."""
+        logger.debug(f"[{self._connection_id}] Starting TLS handler cleanup")
+        
+        # Close all transports
+        for transport_id, transport in list(self._transports.items()):
+            try:
+                if transport and not transport.is_closing():
+                    transport.close()
+            except Exception as e:
+                logger.debug(f"[{self._connection_id}] Error closing transport: {e}")
+            self._transports.pop(transport_id, None)
+            
+        # Close all sockets
+        for sock_id, socket in list(self._stored_sockets.items()):
+            try:
+                socket.close()
+            except Exception as e:
+                logger.debug(f"[{self._connection_id}] Error closing socket: {e}")
+            self._stored_sockets.pop(sock_id, None)
+            self._socket_states.pop(sock_id, None)
+            
+        # Clear connection stats
+        self._connection_stats.clear()
+        
+        logger.debug(f"[{self._connection_id}] TLS handler cleanup complete")

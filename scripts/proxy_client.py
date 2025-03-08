@@ -15,8 +15,8 @@ def fetch_proxy_settings():
         return None
 
 def apply_proxy_settings(settings):
-    # Always use port 8080 for the actual proxy traffic
-    proxy_port = 8080
+    # Always use port 8083 for the actual proxy traffic
+    proxy_port = 8083
     
     if os.name == 'nt':  # Windows
         # Use netsh to set proxy settings on Windows

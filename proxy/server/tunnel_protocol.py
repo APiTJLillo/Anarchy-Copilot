@@ -3,9 +3,10 @@ import asyncio
 import logging
 import socket
 from datetime import datetime
-from typing import Optional, Dict, Any, Callable, List, Protocol, runtime_checkable
+from typing import Optional, Dict, Any, Callable, List, Protocol, runtime_checkable, Set
 from async_timeout import timeout as async_timeout
 import time
+import uuid
 
 from .flow_control import FlowControl
 from .state import proxy_state
@@ -76,6 +77,30 @@ class TunnelProtocol(asyncio.Protocol):
         # Add timeout counter
         self._write_timeouts = 0
         self._max_queue_size = 2000  # Increased queue size limit
+        
+        self._tunnel_tasks: Set[asyncio.Task] = set()
+        self._remote_transport = None
+        self._remote_protocol = None
+        self._tunnel_start_time: Optional[datetime] = None
+        self._history_entry_id: Optional[int] = None
+        self._connect_headers: Dict[str, str] = {}
+        self._host: Optional[str] = None
+        self._port: Optional[int] = None
+        self._in_tunnel_mode = False
+        self._tunnel_buffer = bytearray()
+        self._buffer = bytearray()  # Buffer for TLS handshake data
+        self._connect_response_sent = False
+        
+        # Connection tracking initialization
+        self._connection_id = str(uuid.uuid4())
+        self._requests_processed = 0
+        self._events: List[Dict[str, Any]] = []
+        self._event_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
+        self._event_processor = None
+        self._stall_timeout = 10.0  # 10 seconds stall detection
+        self._monitor_task = None
+
+        logger.debug(f"[{self._connection_id}] TunnelProtocol initialized")
     
     @property
     def transport(self) -> Optional[asyncio.Transport]:
@@ -83,148 +108,133 @@ class TunnelProtocol(asyncio.Protocol):
         return self._transport
     
     def connection_made(self, transport: asyncio.Transport) -> None:
-        """Handle connection established."""
-        self._transport = transport
+        """Handle new connection."""
+        super().connection_made(transport)
+        self.transport = transport
+        self._tunnel_start_time = datetime.now()
+        
+        # Configure socket
+        sock = transport.get_extra_info('socket')
+        if sock:
+            try:
+                # Set TCP_NODELAY to disable Nagle's algorithm
+                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                # Set receive buffer size
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 256 * 1024)
+                logger.debug(f"[{self._connection_id}] Socket configured for performance")
+            except socket.error as e:
+                logger.warning(f"[{self._connection_id}] Failed to configure socket: {e}")
+        
+        # Start activity monitor
+        self._monitor_task = asyncio.create_task(self._monitor_activity())
+        logger.info(f"[{self._connection_id}] New connection established")
+        
         self._write_task = asyncio.create_task(self._process_write_queue())
         logger.debug(f"[{self._connection_id}] Tunnel transport established")
         
         if hasattr(transport, 'get_write_buffer_size'):
             transport.set_write_buffer_limits(high=self._buffer_size)
         
-        # Configure socket options for better performance
-        sock = transport.get_extra_info('socket')
-        if sock:
-            try:
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 524288)  # Increased from 262144
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 524288)  # Increased from 262144
-                sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            except Exception as e:
-                logger.warning(f"[{self._connection_id}] Failed to set socket options: {e}")
-        
         # Log connection
         logger.debug(f"[{self._connection_id}] Connection made to {transport.get_extra_info('peername')}")
         
         asyncio.create_task(self._update_metrics("connected"))
     
-    def connection_lost(self, exc: Optional[Exception]) -> None:
-        """Handle connection loss."""
-        self._closing = True
-        if exc:
-            logger.error(f"[{self._connection_id}] Tunnel connection lost: {exc}")
-            asyncio.create_task(self._update_metrics("error", error=str(exc)))
-        else:
-            asyncio.create_task(self._update_metrics("closed"))
-        
-        # Cancel write processor
-        if self._write_task and not self._write_task.done():
-            self._write_task.cancel()
-        
-        # Close client transport if still open
-        if self.client_transport and not self.client_transport.is_closing():
-            self.client_transport.close()
-    
+    async def _monitor_activity(self):
+        """Monitor connection for stalls."""
+        while not self.transport.is_closing():
+            await asyncio.sleep(1.0)
+            now = time.time()
+            if now - self._last_activity > self._stall_timeout:
+                logger.warning(
+                    f"[{self._connection_id}] Connection stall detected - "
+                    f"No activity for {now - self._last_activity:.1f}s"
+                )
+            if self._in_tunnel_mode:
+                logger.debug(
+                    f"[{self._connection_id}] Tunnel stats: "
+                    f"Sent={self._bytes_sent}, "
+                    f"Received={self._bytes_received}, "
+                    f"Buffer={len(self._tunnel_buffer)}"
+                )
+
     def data_received(self, data: bytes) -> None:
-        """Handle received data with flow control and metrics."""
-        if self._closing:
-            return
+        """Handle received data with detailed logging."""
+        size = len(data)
+        self._bytes_received += size
+        self._last_activity = time.time()
         
-        try:
-            data_len = len(data)
-            asyncio.create_task(self._update_metrics("data_received", bytes_count=data_len))
-            
-            if self.on_data_received:
-                self.on_data_received(data_len)
-            
-            # Get target transport and check if we need TLS record size limits
-            target = self._get_target_transport()
-            if target and not target.is_closing():
-                # Check if this is a TLS connection
-                ssl_object = target.get_extra_info('ssl_object')
-                is_tls = bool(ssl_object)
+        logger.debug(
+            f"[{self._connection_id}] Received {size} bytes "
+            f"(total: {self._bytes_received}, tunnel_mode: {self._in_tunnel_mode})"
+        )
+
+        if self._in_tunnel_mode:
+            # Check if this looks like a TLS record
+            if data and len(data) >= 5:  # Minimum TLS record size
+                record_type = data[0]
+                version = (data[1] << 8) | data[2]
+                length = (data[3] << 8) | data[4]
                 
-                if is_tls:
-                    # Split data into TLS record-sized chunks
-                    MAX_CHUNK = 32768  # Increased from 16384
-                    logger.debug(f"[{self._connection_id}] Using TLS chunking for {data_len} bytes")
-                    
-                    # Process data in chunks
-                    offset = 0
-                    while offset < data_len:
-                        chunk_size = min(MAX_CHUNK, data_len - offset)
-                        chunk = data[offset:offset + chunk_size]
-                        
-                        # Queue chunk for writing with backpressure handling
-                        try:
-                            if not self._write_queue.full():
-                                self._write_queue.put_nowait(chunk)
-                                offset += chunk_size
-                            else:
-                                # Apply backpressure
-                                if hasattr(self.transport, "pause_reading"):
-                                    self.transport.pause_reading()
-                                    logger.debug(f"[{self._connection_id}] Paused reading due to full write queue")
-                                # Create task to retry after a delay
-                                asyncio.create_task(self._retry_write(chunk))
-                                break
-                        except asyncio.QueueFull:
-                            if hasattr(self.transport, "pause_reading"):
-                                self.transport.pause_reading()
-                            logger.warning(f"[{self._connection_id}] Write queue full, pausing reading")
-                            # Create task to retry after a delay
-                            asyncio.create_task(self._retry_write(chunk))
-                            break
-                else:
-                    # For non-TLS connections, use direct writes with backpressure
-                    try:
-                        if not self._write_queue.full():
-                            self._write_queue.put_nowait(data)
-                        else:
-                            if hasattr(self.transport, "pause_reading"):
-                                self.transport.pause_reading()
-                            logger.warning(f"[{self._connection_id}] Write queue full, pausing reading")
-                            # Create task to retry after a delay
-                            asyncio.create_task(self._retry_write(data))
-                    except asyncio.QueueFull:
-                        if hasattr(self.transport, "pause_reading"):
-                            self.transport.pause_reading()
-                        logger.warning(f"[{self._connection_id}] Write queue full, pausing reading")
-                        # Create task to retry after a delay
-                        asyncio.create_task(self._retry_write(data))
+                record_types = {
+                    20: "ChangeCipherSpec",
+                    21: "Alert",
+                    22: "Handshake",
+                    23: "Application"
+                }
                 
-                # Ensure write task is running
-                if not self._write_task or self._write_task.done():
-                    self._write_task = asyncio.create_task(self._process_write_queue())
-                    
+                record_name = record_types.get(record_type, "Unknown")
+                logger.debug(
+                    f"[{self._connection_id}] TLS Record: "
+                    f"Type={record_name}({record_type}), "
+                    f"Version=0x{version:04x}, "
+                    f"Length={length}"
+                )
+
+            # Forward data to tunnel
+            if self._remote_transport and not self._remote_transport.is_closing():
+                try:
+                    self._remote_transport.write(data)
+                    logger.debug(f"[{self._connection_id}] Forwarded {size} bytes to tunnel")
+                except Exception as e:
+                    logger.error(f"[{self._connection_id}] Failed to forward data: {e}")
             else:
-                logger.error(f"[{self._connection_id}] No valid target transport for forwarding")
-                asyncio.create_task(self._cleanup())
-                
-        except Exception as e:
-            logger.error(f"[{self._connection_id}] Error handling tunnel data: {e}")
-            asyncio.create_task(self._cleanup(error=str(e)))
+                logger.warning(f"[{self._connection_id}] No remote transport available")
+        else:
+            logger.debug(f"[{self._connection_id}] Buffering {size} bytes (not in tunnel mode)")
+            self._buffer.extend(data)
 
-    async def _retry_write(self, data: bytes, max_attempts: int = 5) -> None:
-        """Retry writing data to the queue with exponential backoff."""
-        attempt = 0
-        while attempt < max_attempts:
-            try:
-                await asyncio.sleep(0.1 * (2 ** attempt))  # Exponential backoff
-                if self._closing:
-                    return
-                
-                if not self._write_queue.full():
-                    self._write_queue.put_nowait(data)
-                    if hasattr(self.transport, "resume_reading"):
-                        self.transport.resume_reading()
-                    logger.debug(f"[{self._connection_id}] Successfully retried write after {attempt + 1} attempts")
-                    return
-                    
-            except asyncio.QueueFull:
-                attempt += 1
-                continue
+    def connection_lost(self, exc: Optional[Exception]) -> None:
+        """Handle connection loss with cleanup."""
+        duration = None
+        if self._tunnel_start_time:
+            duration = (datetime.now() - self._tunnel_start_time).total_seconds()
+        
+        if exc:
+            logger.error(f"[{self._connection_id}] Connection lost with error: {exc}")
+        else:
+            logger.info(f"[{self._connection_id}] Connection closed normally")
             
-        logger.error(f"[{self._connection_id}] Failed to write data after {max_attempts} attempts")
-
+        logger.info(
+            f"[{self._connection_id}] Connection statistics:\n"
+            f"  Duration: {duration:.1f}s\n"
+            f"  Bytes sent: {self._bytes_sent}\n"
+            f"  Bytes received: {self._bytes_received}\n"
+            f"  Requests processed: {self._requests_processed}"
+        )
+        
+        # Clean up
+        if self._monitor_task:
+            self._monitor_task.cancel()
+        
+        for task in self._tunnel_tasks:
+            task.cancel()
+        
+        if self._remote_transport:
+            self._remote_transport.close()
+            
+        super().connection_lost(exc)
+    
     async def _process_write_queue(self) -> None:
         """Process queued writes with flow control."""
         try:

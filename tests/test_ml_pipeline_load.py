@@ -225,10 +225,10 @@ def mock_ml_service(test_data_dir: Path) -> Generator[Callable, None, None]:
     runner = web.AppRunner(app)
     loop = asyncio.get_event_loop()
     loop.run_until_complete(runner.setup())
-    site = web.TCPSite(runner, 'localhost', 8080)
+    site = web.TCPSite(runner, 'localhost', 8083)
     loop.run_until_complete(site.start())
     
-    yield lambda: 'http://localhost:8080/predict'
+    yield lambda: 'http://localhost:8083/predict'
     
     loop.run_until_complete(runner.cleanup())
 

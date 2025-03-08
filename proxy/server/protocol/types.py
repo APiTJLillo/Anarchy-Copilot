@@ -1,7 +1,16 @@
 """Shared types and interfaces for proxy protocols."""
-from typing import Protocol, Optional, Dict, Any, Tuple
+from typing import Protocol, Optional, Dict, Any, Tuple, Union
 import asyncio
 import ssl
+from dataclasses import dataclass
+
+@dataclass
+class Request:
+    """HTTP request representation."""
+    method: str
+    target: str
+    headers: Dict[str, str]
+    body: Optional[Union[str, bytes]] = None
 
 class TlsCapableProtocol(Protocol):
     """Interface for protocols that can handle TLS connections."""

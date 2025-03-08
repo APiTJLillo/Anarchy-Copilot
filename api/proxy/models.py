@@ -157,7 +157,7 @@ class ConnectionInfo(BaseModel):
 class ProxySettings(BaseModel):
     """Model for proxy configuration settings."""
     host: str = "0.0.0.0"
-    port: int = 8080
+    port: int = 8083
     allowed_hosts: Optional[List[str]] = None
     excluded_hosts: Optional[List[str]] = None
     intercept_requests: bool = True

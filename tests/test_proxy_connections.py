@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class ProxyTestClient:
     """Test client for proxy connections."""
 
-    def __init__(self, proxy_url: str = "http://localhost:8080"):
+    def __init__(self, proxy_url: str = "http://localhost:8083"):
         self.proxy_url = proxy_url
         self.session: Optional[aiohttp.ClientSession] = None
 
@@ -158,7 +158,7 @@ async def proxy_server():
     """Create and run a proxy server instance."""
     server = ProxyServer(
         host='localhost',
-        port=8080,
+        port=8083,
         cert_path='certs/ca.crt',
         key_path='certs/ca.key'
     )

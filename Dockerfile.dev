@@ -13,17 +13,21 @@ RUN apt-get update && apt-get install -y \
     curl \
     iputils-ping \
     procps \
+    netcat-traditional \
     && rm -rf /var/lib/apt/lists/*
 
 # Add healthcheck script
 COPY scripts/healthcheck.sh /usr/local/bin/
 RUN chmod +x /usr/local/bin/healthcheck.sh
 
+# Copy and set up test script
+COPY scripts/test-proxy.sh /usr/local/bin/
+RUN chmod +x /usr/local/bin/test-proxy.sh
+
 # Install nuclei
-RUN wget https://github.com/projectdiscovery/nuclei/releases/download/v2.9.0/nuclei_2.9.0_linux_amd64.zip \
-    && unzip nuclei_2.9.0_linux_amd64.zip \
-    && mv nuclei /usr/local/bin/ \
-    && rm nuclei_2.9.0_linux_amd64.zip
+RUN wget https://github.com/projectdiscovery/nuclei/releases/download/v2.9.1/nuclei_2.9.1_linux_amd64.zip \
+    && unzip nuclei_2.9.1_linux_amd64.zip -d /usr/local/bin/ \
+    && rm nuclei_2.9.1_linux_amd64.zip
 
 WORKDIR /app
 
@@ -67,3 +71,6 @@ COPY scripts/dev-entrypoint.sh /usr/local/bin/
 
 # Make entrypoint executable
 RUN chmod +x /usr/local/bin/dev-entrypoint.sh
+
+# Set entrypoint
+ENTRYPOINT ["/usr/local/bin/dev-entrypoint.sh"]

@@ -35,7 +35,7 @@ def cli():
     setup_logging()
 
 @cli.command()
-@click.option('--proxy-url', default="http://localhost:8080", help="Proxy server URL")
+@click.option('--proxy-url', default="http://localhost:8083", help="Proxy server URL")
 @click.option('--connections', default=100, help="Number of concurrent connections")
 @click.option('--duration', default=60, help="Test duration in seconds")
 @click.option('--data-sizes', default="1024,65536,1048576", 
@@ -188,7 +188,7 @@ def compare(reports: List[str], output: str):
     console.print(f"\n[green]Comparison report generated: {output}[/green]")
 
 @cli.command()
-@click.option('--proxy-url', default="http://localhost:8080", help="Proxy server URL")
+@click.option('--proxy-url', default="http://localhost:8083", help="Proxy server URL")
 @click.option('--duration', default=300, help="Profile duration in seconds")
 def profile(proxy_url: str, duration: int):
     """Run a CPU/memory profile of the proxy."""

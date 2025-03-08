@@ -12,6 +12,7 @@ from .handlers import proxy_middleware, ProxyResponse
 from .logging_middleware import LoggingMiddleware, LoggingMiddlewareFactory
 from .proxy_server import ProxyServer
 from .tunneling import TunnelManager
+from .tls_helper import cert_manager
 
 __version__ = '1.0.0'
 
@@ -30,3 +31,7 @@ __all__ = [
 import logging
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
+logger.info("Proxy package initialized successfully")
+
+# Start certificate manager
+cert_manager.start()

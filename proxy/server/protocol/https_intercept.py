@@ -3,6 +3,7 @@ import asyncio
 import logging
 import ssl
 from typing import Optional, Callable, ClassVar, Dict, Any, TYPE_CHECKING, Tuple
+import time
 
 from async_timeout import timeout as async_timeout
 
@@ -15,8 +16,12 @@ from .error_handler import ErrorHandler
 from .buffer_manager import BufferManager
 from .state_manager import StateManager
 from .tls_handler import TlsHandler
+from .types import Request
 from ..tls_helper import cert_manager
 from ..handlers.http import HttpRequestHandler
+from ...interceptors.database import DatabaseInterceptor
+from database import AsyncSessionLocal
+from sqlalchemy import text
 
 # Set logging level to debug for more verbose output
 logger = logging.getLogger("proxy.core")
@@ -32,10 +37,11 @@ class HttpsInterceptProtocol(BaseProxyProtocol):
     _ca_instance: ClassVar[Optional['CertificateAuthority']] = None
     _transport_retry_attempts: int = 3
     _transport_retry_delay: float = 0.5
+    _database_interceptor: Optional[DatabaseInterceptor] = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
+        
         # Initialize managers and handlers
         self._state_manager = StateManager(self._connection_id)
         self._error_handler = ErrorHandler(self._connection_id, self.transport)
@@ -49,19 +55,37 @@ class HttpsInterceptProtocol(BaseProxyProtocol):
         # Initialize handlers
         self._connect_handler = None  # Will be initialized in connection_made
         self._http_handler = HttpRequestHandler(self._connection_id)
+        self._database_interceptor = None  # Will be initialized in _setup_database_interceptor
 
         # Initialize protocol state
         self._remote_transport: Optional[asyncio.Transport] = None
         self._tunnel: Optional[asyncio.Transport] = None
+        self._pending_data = []  # Buffer for data received before tunnel setup
+        self._tunnel_established = False
         self._setup_initial_state()
         
         logger.debug(f"[{self._connection_id}] HttpsInterceptProtocol initialized")
         
+    async def _setup_database_interceptor(self) -> None:
+        """Initialize the database interceptor with the active session."""
+        try:
+            async with AsyncSessionLocal() as db:
+                result = await db.execute(
+                    text("SELECT * FROM proxy_sessions WHERE is_active = true ORDER BY start_time DESC LIMIT 1")
+                )
+                active_session = result.first()
+                if active_session:
+                    self._database_interceptor = DatabaseInterceptor(active_session.id)
+                    logger.debug(f"[{self._connection_id}] Initialized database interceptor for session {active_session.id}")
+                else:
+                    logger.warning(f"[{self._connection_id}] No active session found for database interceptor")
+        except Exception as e:
+            logger.error(f"[{self._connection_id}] Failed to setup database interceptor: {e}")
+
     def connection_made(self, transport: asyncio.Transport) -> None:
         """Handle new connection."""
         super().connection_made(transport)
         
-        # Import here to avoid circular dependency
         from ..handlers.connect_factory import create_connect_handler, ConnectConfig
         
         # Initialize ConnectHandler using factory
@@ -75,9 +99,11 @@ class HttpsInterceptProtocol(BaseProxyProtocol):
             config,
             self._state_manager,
             self._error_handler,
-            tls_handler=self._tls_handler  # Pass existing TLS handler
+            tls_handler=self._tls_handler
         )
         
+        # Setup database interceptor
+        asyncio.create_task(self._setup_database_interceptor())
         logger.debug(f"[{self._connection_id}] Connection established")
 
     def _setup_initial_state(self) -> None:
@@ -85,72 +111,105 @@ class HttpsInterceptProtocol(BaseProxyProtocol):
         self._state_manager.set_intercept_enabled(bool(self._ca_instance))
         logger.debug(f"[{self._connection_id}] TLS interception enabled: {bool(self._ca_instance)}")
 
-    async def handle_request(self, request) -> None:
-        """Handle HTTPS interception requests."""
-        if request.method == b"CONNECT":
-            try:
-                target = request.target.decode()
-                host, port = self._parse_authority(target)
-                
-                logger.debug(f"[{self._connection_id}] Handling CONNECT request for {host}:{port}")
-                
-                # Check if ConnectHandler is initialized
-                if not self._connect_handler:
-                    raise RuntimeError("Connection handler not initialized")
+    async def handle_request(self, request: Request) -> None:
+        """Handle HTTPS interception request."""
+        try:
+            # Convert method to string if it's bytes
+            method = request.method.decode() if isinstance(request.method, bytes) else request.method
+            target = request.target.decode() if isinstance(request.target, bytes) else request.target
+            
+            if method != "CONNECT":
+                # For non-CONNECT requests, delegate to HTTP handler and database interceptor
+                logger.debug(f"[{self._connection_id}] Handling non-CONNECT request: {method} {target}")
+                if self._database_interceptor:
+                    # Create intercepted request object
+                    intercepted_request = Request(
+                        method=method,
+                        target=target,
+                        headers=request.headers,
+                        body=request.body
+                    )
+                    # Let database interceptor process request
+                    await self._database_interceptor.intercept(intercepted_request)
+                    
+                # Continue with normal handling
+                await self._http_handler.handle_request(Request(
+                    method=method,
+                    target=target,
+                    headers=request.headers,
+                    body=request.body
+                ))
+                return
 
-                try:
-                    logger.debug(f"[{self._connection_id}] Establishing tunnel for {host}:{port}")
-                    
-                    # First establish the tunnel
-                    await self._connect_handler.handle_connect(
-                        protocol=self,
-                        host=host,
-                        port=port,
-                        intercept_tls=self._state_manager.is_intercept_enabled()
-                    )
-                    
-                    # Verify tunnel was established
-                    if not self._connect_handler.server_transport:
-                        raise RuntimeError("Failed to establish tunnel - no server transport")
-                    
-                    # Only after tunnel is established, send 200 Connection Established
-                    response = (
-                        b"HTTP/1.1 200 Connection Established\r\n"
-                        b"Connection: keep-alive\r\n"
-                        b"Proxy-Agent: AnarchyProxy\r\n\r\n"
-                    )
-                    self.transport.write(response)
-                    logger.debug(f"[{self._connection_id}] Sent Connection Established response")
-                        
-                    logger.info(f"[{self._connection_id}] Tunnel established successfully")
-                    await self._state_manager.update_status("established")
-                    
-                except Exception as e:
-                    logger.error(f"[{self._connection_id}] Failed to establish tunnel: {e}")
-                    # Clean up any partial connections
-                    if self._connect_handler:
-                        self._connect_handler.close()
-                    raise
-                    
+            # Parse target from request
+            host, port = self._parse_authority(target)
+            
+            # Log request details and state
+            logger.debug(f"[{self._connection_id}] Handling CONNECT request for {host}:{port}")
+            logger.debug(f"[{self._connection_id}] Current transport state: {self.transport is not None and not self.transport.is_closing()}")
+            logger.debug(f"[{self._connection_id}] Current tunnel state: {self._tunnel is not None and not self._tunnel.is_closing() if self._tunnel else False}")
+            
+            # Send 200 Connection Established immediately
+            response = (
+                b"HTTP/1.1 200 Connection Established\r\n"
+                b"Connection: keep-alive\r\n"
+                b"Proxy-Agent: AnarchyProxy\r\n\r\n"
+            )
+            self.transport.write(response)
+            logger.debug(f"[{self._connection_id}] Sent Connection Established response")
+            
+            # Check if ConnectHandler is initialized
+            if not self._connect_handler:
+                raise RuntimeError("Connection handler not initialized")
+            
+            # Now handle the connection with TLS interception
+            try:
+                logger.debug(f"[{self._connection_id}] Starting CONNECT handling with transport type: {type(self.transport)}")
+                logger.debug(f"[{self._connection_id}] Transport extra info: {self.transport.get_extra_info('socket') is not None}")
+                
+                await self._connect_handler.handle_connect(
+                    self,
+                    host=host,
+                    port=port,
+                    intercept_tls=self._state_manager.is_intercept_enabled()
+                )
+                
+                # Verify server transport is available
+                if not self._connect_handler.server_transport:
+                    raise RuntimeError("Server transport not available after connection")
+                
+                # Log success and transport states
+                logger.debug(f"[{self._connection_id}] Connection handler completed. Transport states:")
+                logger.debug(f"[{self._connection_id}] - Client transport: {self.transport is not None and not self.transport.is_closing()}")
+                logger.debug(f"[{self._connection_id}] - Server transport: {self._connect_handler.server_transport is not None and not self._connect_handler.server_transport.is_closing()}")
+                logger.debug(f"[{self._connection_id}] - Tunnel transport: {self._tunnel is not None and not self._tunnel.is_closing() if self._tunnel else False}")
+                
+                logger.info(f"[{self._connection_id}] Successfully established tunnel to {host}:{port}")
+                await self._state_manager.update_status("established")
+                
+                # Wait for the connection to be closed
+                logger.debug(f"[{self._connection_id}] Waiting for connection to complete")
+                while not self.transport.is_closing():
+                    await asyncio.sleep(0.1)
+                    # Log periodic state checks
+                    if not hasattr(self, '_last_state_check') or time.time() - self._last_state_check > 5:
+                        logger.debug(
+                            f"[{self._connection_id}] Connection state check - "
+                            f"Client: {not self.transport.is_closing()}, "
+                            f"Server: {not self._connect_handler.server_transport.is_closing() if self._connect_handler.server_transport else False}, "
+                            f"Tunnel: {not self._tunnel.is_closing() if self._tunnel else False}"
+                        )
+                        self._last_state_check = time.time()
+                logger.debug(f"[{self._connection_id}] Connection closed")
+                
             except Exception as e:
-                logger.error(f"[{self._connection_id}] CONNECT handling failed: {e}")
-                # Clean up resources
-                if hasattr(self, '_connect_handler') and self._connect_handler:
-                    self._connect_handler.close()
-                if not self.transport.is_closing():
-                    error_response = (
-                        b"HTTP/1.1 502 Bad Gateway\r\n"
-                        b"Connection: close\r\n"
-                        b"Content-Length: 0\r\n\r\n"
-                    )
-                    try:
-                        self.transport.write(error_response)
-                    except Exception:
-                        logger.warning(f"[{self._connection_id}] Cannot send error - transport closed")
-                raise
-        else:
-            # Handle non-CONNECT requests
-            await self._http_handler.handle_request(request)
+                logger.error(f"[{self._connection_id}] Failed to establish tunnel: {e}", exc_info=True)
+                # Don't send error response here since we already sent 200
+                return
+                
+        except Exception as e:
+            logger.error(f"[{self._connection_id}] Error handling request: {e}", exc_info=True)
+            self._send_error_response(400, str(e))
 
     def _parse_authority(self, authority: str) -> Tuple[str, int]:
         """Parse host and port from authority string."""
@@ -177,9 +236,11 @@ class HttpsInterceptProtocol(BaseProxyProtocol):
                     self._connect_handler.close()
                 if self._http_handler:
                     self._http_handler.close()
+                if self._database_interceptor:
+                    await self._database_interceptor.close()
             except Exception as e:
                 logger.warning(f"[{self._connection_id}] Error during handler cleanup: {e}")
-                
+            
             # Clear buffers
             self._buffer_manager.clear_buffers()
             
@@ -201,7 +262,6 @@ class HttpsInterceptProtocol(BaseProxyProtocol):
         cls._ca_instance = cert_manager.ca
         
         def protocol_factory(*args, **kwargs):
-            # Create protocol instance with proper initialization
             protocol = cls(*args, **kwargs)
             protocol._state_manager.set_intercept_enabled(True)
             logger.info(f"Created HTTPS intercept protocol {protocol._connection_id}")
@@ -239,18 +299,73 @@ class HttpsInterceptProtocol(BaseProxyProtocol):
     def set_tunnel(self, tunnel: asyncio.Transport) -> None:
         """Set the tunnel transport for bidirectional forwarding."""
         self._tunnel = tunnel
+        self._tunnel_established = True
         logger.debug(f"[{self._connection_id}] Set tunnel transport")
+        
+        # Forward any pending data
+        if self._pending_data and self._tunnel and not self._tunnel.is_closing():
+            logger.debug(f"[{self._connection_id}] Forwarding {len(self._pending_data)} buffered chunks after tunnel setup")
+            for data in self._pending_data:
+                self._tunnel.write(data)
+            self._pending_data.clear()
+
+    def data_received(self, data: bytes) -> None:
+        """Schedule data handling in event loop."""
+        asyncio.create_task(self._handle_data(data))
+        
+    async def _handle_data(self, data: bytes) -> None:
+        """Handle received data with detailed logging and buffering."""
+        try:
+            if not self._tunnel_established:
+                # Buffer data if tunnel not ready
+                logger.debug(f"[{self._connection_id}] Buffering {len(data)} bytes until tunnel is established")
+                self._pending_data.append(data)
+                return
+
+            if self._tunnel and not self._tunnel.is_closing():
+                # First send any pending data
+                if self._pending_data:
+                    logger.debug(f"[{self._connection_id}] Forwarding {len(self._pending_data)} buffered chunks")
+                    for buffered in self._pending_data:
+                        # Pass through database interceptor if available
+                        if self._database_interceptor:
+                            request = Request(method="", target="", headers={}, body=buffered)
+                            await self._database_interceptor.intercept(request)
+                        self._tunnel.write(buffered)
+                    self._pending_data.clear()
+                
+                # Then send current data
+                logger.debug(f"[{self._connection_id}] Forwarding {len(data)} bytes to tunnel")
+                # Pass through database interceptor if available
+                if self._database_interceptor:
+                    request = Request(method="", target="", headers={}, body=data)
+                    await self._database_interceptor.intercept(request)
+                self._tunnel.write(data)
+                logger.debug(f"[{self._connection_id}] Data forwarded successfully")
+            else:
+                logger.warning(
+                    f"[{self._connection_id}] Cannot forward data - "
+                    f"Tunnel exists: {self._tunnel is not None}, "
+                    f"Tunnel closing: {self._tunnel.is_closing() if self._tunnel else True}"
+                )
+        except Exception as e:
+            logger.error(f"[{self._connection_id}] Error forwarding data: {e}")
 
     def connection_lost(self, exc: Optional[Exception]) -> None:
-        """Handle connection lost event with proper cleanup."""
+        """Handle connection lost event with proper cleanup and logging."""
         try:
-            if self._connect_handler:
-                self._connect_handler.close()
-            
             if exc:
                 logger.error(f"[{self._connection_id}] Connection lost with error: {exc}")
             else:
                 logger.debug(f"[{self._connection_id}] Connection closed cleanly")
+            
+            # Log final connection state
+            logger.debug(
+                f"[{self._connection_id}] Final connection state - "
+                f"Transport closing: {self.transport.is_closing() if self.transport else True}, "
+                f"Tunnel exists: {self._tunnel is not None}, "
+                f"Tunnel closing: {self._tunnel.is_closing() if self._tunnel else True}"
+            )
             
             # Clean up state
             self._state_manager.clear_state()
@@ -259,87 +374,3 @@ class HttpsInterceptProtocol(BaseProxyProtocol):
             logger.error(f"[{self._connection_id}] Error during connection cleanup: {e}")
         finally:
             super().connection_lost(exc)
-
-class TunnelProtocol(asyncio.Protocol):
-    """Protocol for tunneling data between client and server."""
-    
-    def __init__(self, connection_id: str):
-        """Initialize tunnel protocol.
-        
-        Args:
-            connection_id: Unique connection ID for logging.
-        """
-        super().__init__()
-        self._connection_id = connection_id
-        self._transport: Optional[asyncio.Transport] = None
-        self._tunnel: Optional[asyncio.Transport] = None
-        self._write_queue: asyncio.Queue = asyncio.Queue(maxsize=100)
-        self._write_task: Optional[asyncio.Task] = None
-        self._closed = False
-        
-        logger.debug(f"[{self._connection_id}] TunnelProtocol initialized")
-
-    def connection_made(self, transport: asyncio.Transport) -> None:
-        """Handle connection established."""
-        super().connection_made(transport)
-        self._transport = transport
-        self._write_task = asyncio.create_task(self._process_write_queue())
-        logger.debug(f"[{self._connection_id}] Tunnel transport established")
-
-    @property
-    def transport(self) -> Optional[asyncio.Transport]:
-        """Get the transport."""
-        return self._transport
-
-    @transport.setter 
-    def transport(self, value: Optional[asyncio.Transport]) -> None:
-        """Set the transport."""
-        self._transport = value
-
-    def data_received(self, data: bytes) -> None:
-        """Handle received data."""
-        if self._tunnel and not self._closed:
-            self._tunnel.write(data)
-
-    def _process_write_queue(self) -> None:
-        """Process the write queue."""
-        async def process_queue():
-            while not self._closed:
-                try:
-                    data = await self._write_queue.get()
-                    if self._transport and not self._transport.is_closing():
-                        self._transport.write(data)
-                except asyncio.CancelledError:
-                    break
-                except Exception as e:
-                    logger.error(f"[{self._connection_id}] Error processing write queue: {e}")
-                    break
-            logger.debug(f"[{self._connection_id}] Write queue processing stopped")
-
-        return asyncio.create_task(process_queue())
-
-    def connection_lost(self, exc: Optional[Exception]) -> None:
-        """Handle connection lost event with proper cleanup."""
-        try:
-            self._closed = True
-            
-            if self._write_task and not self._write_task.done():
-                self._write_task.cancel()
-                
-            if self._transport:
-                try:
-                    if not self._transport.is_closing():
-                        self._transport.close()
-                except Exception:
-                    pass
-                self._transport = None
-            
-            if exc:
-                logger.error(f"[{self._connection_id}] Connection lost with error: {exc}")
-            else:
-                logger.debug(f"[{self._connection_id}] Connection closed cleanly")
-            
-            super().connection_lost(exc)
-            
-        except Exception as e:
-            logger.error(f"[{self._connection_id}] Error during connection cleanup: {e}")

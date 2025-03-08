@@ -38,7 +38,7 @@ class Settings(BaseSettings):
 
     # Proxy Settings
     proxy_host: str = "127.0.0.1"
-    proxy_port: int = 8080
+    proxy_port: int = 8083
     proxy_intercept_requests: bool = True
     proxy_intercept_responses: bool = True
     proxy_max_connections: int = 100

@@ -1,0 +1,75 @@
+{
+    "version": 1,
+    "disable_existing_loggers": false,
+    "formatters": {
+        "detailed": {
+            "format": "%(asctime)s - %(name)s - [%(filename)s:%(lineno)d] - %(levelname)s - %(message)s",
+            "datefmt": "%Y-%m-%d %H:%M:%S"
+        }
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "detailed",
+            "stream": "ext://sys.stdout",
+            "level": "DEBUG"
+        }
+    },
+    "loggers": {
+        "": {
+            "handlers": [
+                "console"
+            ],
+            "level": "INFO"
+        },
+        "proxy": {
+            "level": "DEBUG",
+            "handlers": [
+                "console"
+            ],
+            "propagate": false
+        },
+        "proxy.core": {
+            "level": "DEBUG",
+            "handlers": [
+                "console"
+            ],
+            "propagate": false
+        },
+        "proxy.server": {
+            "level": "DEBUG",
+            "handlers": [
+                "console"
+            ],
+            "propagate": false
+        },
+        "proxy.server.handlers": {
+            "level": "DEBUG",
+            "handlers": [
+                "console"
+            ],
+            "propagate": false
+        },
+        "uvicorn": {
+            "level": "DEBUG",
+            "handlers": [
+                "console"
+            ],
+            "propagate": false
+        },
+        "uvicorn.error": {
+            "level": "DEBUG",
+            "handlers": [
+                "console"
+            ],
+            "propagate": false
+        },
+        "uvicorn.access": {
+            "level": "DEBUG",
+            "handlers": [
+                "console"
+            ],
+            "propagate": false
+        }
+    }
+}

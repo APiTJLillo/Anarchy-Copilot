@@ -5,6 +5,7 @@ import logging
 from datetime import datetime
 import asyncio
 from async_timeout import timeout as async_timeout
+from sqlalchemy import text
 
 from database import AsyncSessionLocal
 from api.proxy.database_models import ProxyHistoryEntry
@@ -142,18 +143,28 @@ class HttpRequestHandler:
         """Create initial history entry for request."""
         try:
             async with AsyncSessionLocal() as db:
-                entry = ProxyHistoryEntry(
-                    timestamp=self._current_request_start_time,
-                    method=self._current_request["method"],
-                    url=self._current_request["url"],
-                    request_headers=self._current_request["request_headers"],
-                    request_body=self._current_request["request_body"].decode('utf-8', errors='ignore'),
-                    tags=["HTTPS"]
+                # Get active session
+                result = await db.execute(
+                    text("SELECT * FROM proxy_sessions WHERE is_active = true ORDER BY start_time DESC LIMIT 1")
                 )
-                db.add(entry)
-                await db.commit()
-                await db.refresh(entry)
-                self._history_entry_id = entry.id
+                active_session = result.first()
+                if active_session:
+                    entry = ProxyHistoryEntry(
+                        session_id=active_session.id,
+                        timestamp=self._current_request_start_time,
+                        method=self._current_request["method"],
+                        url=self._current_request["url"],
+                        request_headers=self._current_request["request_headers"],
+                        request_body=self._current_request["request_body"].decode('utf-8', errors='ignore'),
+                        tags=["HTTPS"]
+                    )
+                    db.add(entry)
+                    await db.commit()
+                    await db.refresh(entry)
+                    self._history_entry_id = entry.id
+                    logger.debug(f"[{self.connection_id}] Created history entry {entry.id} for session {active_session.id}")
+                else:
+                    logger.warning(f"[{self.connection_id}] No active session found for history entry")
         except Exception as e:
             logger.error(f"[{self.connection_id}] Failed to create history entry: {e}")
 
@@ -188,3 +199,34 @@ class HttpRequestHandler:
         self._current_response = None
         self._current_request_body.clear()
         self._current_response_body.clear()
+
+    async def handle_request(self, request) -> None:
+        """Handle a Request object directly."""
+        try:
+            # Ensure method and target are strings
+            method = request.method.decode() if isinstance(request.method, bytes) else request.method
+            target = request.target.decode() if isinstance(request.target, bytes) else request.target
+            
+            # Create h11 Request event
+            h11_request = h11.Request(
+                method=method.encode(),
+                target=target.encode(),
+                headers=[(k.encode(), v.encode()) for k, v in request.headers.items()]
+            )
+            
+            # Process request
+            await self._start_request(h11_request)
+            
+            # Add request body if present
+            if request.body:
+                body_data = request.body if isinstance(request.body, bytes) else request.body.encode()
+                self._current_request_body.extend(body_data)
+            
+            # Complete request processing
+            await self._complete_request()
+            
+            logger.debug(f"[{self.connection_id}] Successfully handled request: {method} {target}")
+            
+        except Exception as e:
+            logger.error(f"[{self.connection_id}] Error handling request: {e}")
+            raise

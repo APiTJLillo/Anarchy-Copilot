@@ -72,15 +72,8 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> FastAPI:
             response = await call_next(request)
             
             if isinstance(response, Response):
-                # Disable HTTPS enforcement headers for development
-                response.headers.update({
-                    "strict-transport-security": "max-age=0",
-                    "x-content-security-policy": "upgrade-insecure-requests 0",
-                    "content-security-policy": "upgrade-insecure-requests 0"
-                })
-                
-                # Add CORS headers for preflight
-                if request.method == "OPTIONS":
+                # Add CORS headers for WebSocket upgrade requests
+                if request.headers.get("upgrade", "").lower() == "websocket":
                     origin = request.headers.get("origin")
                     if origin and origin in settings.cors_origins:
                         response.headers.update({
@@ -89,7 +82,15 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> FastAPI:
                             "access-control-allow-headers": "*",
                             "access-control-allow-credentials": "true",
                             "access-control-max-age": "600",
+                            "access-control-expose-headers": "*"
                         })
+                
+                # Disable HTTPS enforcement headers for development
+                response.headers.update({
+                    "strict-transport-security": "max-age=0",
+                    "x-content-security-policy": "upgrade-insecure-requests 0",
+                    "content-security-policy": "upgrade-insecure-requests 0"
+                })
             
             return response
 

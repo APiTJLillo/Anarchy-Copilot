@@ -65,7 +65,7 @@ class NotificationConfig:
     max_batch_size: int = 10
     enable_html: bool = True
     enable_markdown: bool = True
-    alert_link_base: str = "http://localhost:8080/alerts"
+    alert_link_base: str = "http://localhost:8083/alerts"
 
 class EmailNotifier:
     """Email notification channel."""

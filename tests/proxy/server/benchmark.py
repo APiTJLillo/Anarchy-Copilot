@@ -270,7 +270,7 @@ if __name__ == "__main__":
     # Example usage
     async def main():
         config = BenchmarkConfig()
-        metrics = await run_benchmark("http://localhost:8080", config)
+        metrics = await run_benchmark("http://localhost:8083", config)
         reporter = BenchmarkReporter(config)
         reporter.generate_report(metrics, "baseline")
         

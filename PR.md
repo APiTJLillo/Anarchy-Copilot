@@ -46,7 +46,7 @@ docker-compose up -d
 
 3. Configure your browser to use the proxy:
 - Proxy address: `localhost`
-- Port: `8080`
+- Port: `8083`
 
 4. Visit the web interface:
 - Open `http://localhost:3000`
@@ -76,13 +76,13 @@ make test
 
 ### Environment Variables
 - `PROXY_HOST`: Proxy server host (default: 127.0.0.1)
-- `PROXY_PORT`: Proxy server port (default: 8080)
+- `PROXY_PORT`: Proxy server port (default: 8083)
 - `CA_CERT_PATH`: Path to CA certificate
 - `CA_KEY_PATH`: Path to CA private key
 
 ### Docker Configuration
 The proxy service is configured in `docker-compose.yml` with:
-- Port 8080 exposed for proxy traffic
+- Port 8083 exposed for proxy traffic
 - Volume mounts for certificates and history
 - Required environment variables
 

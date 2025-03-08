@@ -86,7 +86,7 @@ pip install -r tests/requirements-proxy-test.txt
 
 # Set environment variables
 export PROXY_HOST=0.0.0.0
-export PROXY_PORT=8080
+export PROXY_PORT=8083
 export CA_CERT_PATH=./certs/ca.crt
 export CA_KEY_PATH=./certs/ca.key
 

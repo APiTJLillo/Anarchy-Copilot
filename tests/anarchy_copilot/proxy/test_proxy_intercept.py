@@ -14,7 +14,7 @@ def test_proxy_intercept_request(test_app: FastAPI, test_client: TestClient):
     # Start proxy server with interception enabled
     response = test_client.post("/proxy/start", json={
         "host": "127.0.0.1",
-        "port": 8080,
+        "port": 8083,
         "interceptRequests": True,
         "interceptResponses": False,
         "allowedHosts": [],
@@ -52,7 +52,7 @@ def test_proxy_intercept_response(test_app: FastAPI, test_client: TestClient):
     # Start proxy server with interception enabled
     response = test_client.post("/proxy/start", json={
         "host": "127.0.0.1",
-        "port": 8080,
+        "port": 8083,
         "interceptRequests": False,
         "interceptResponses": True,
         "allowedHosts": [],
@@ -87,7 +87,7 @@ def test_proxy_drop_request(test_app: FastAPI, test_client: TestClient):
     # Start proxy server with interception enabled
     response = test_client.post("/proxy/start", json={
         "host": "127.0.0.1",
-        "port": 8080,
+        "port": 8083,
         "interceptRequests": True,
         "interceptResponses": False,
         "allowedHosts": [],
@@ -110,7 +110,7 @@ def test_proxy_drop_response(test_app: FastAPI, test_client: TestClient):
     # Start proxy server with interception enabled
     response = test_client.post("/proxy/start", json={
         "host": "127.0.0.1",
-        "port": 8080,
+        "port": 8083,
         "interceptRequests": False,
         "interceptResponses": True,
         "allowedHosts": [],
@@ -134,7 +134,7 @@ async def test_real_http_interception(test_app: FastAPI, test_client: TestClient
     # Start proxy server with both request and response interception
     response = test_client.post("/proxy/start", json={
         "host": "127.0.0.1",
-        "port": 8080,
+        "port": 8083,
         "interceptRequests": True,
         "interceptResponses": True,
         "allowedHosts": ["httpbin.org"],
@@ -151,7 +151,7 @@ async def test_real_http_interception(test_app: FastAPI, test_client: TestClient
         async with session.get(
             'http://httpbin.org/headers',
             headers=original_headers,
-            proxy='http://127.0.0.1:8080'
+            proxy='http://127.0.0.1:8083'
         ) as response:
             assert response.status == 200
             data = await response.json()

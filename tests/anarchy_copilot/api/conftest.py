@@ -194,7 +194,7 @@ async def force_kill_port(port: int, check_interval: float = 0.5) -> bool:
 
                 # Try killing Python processes that might be holding the port
                 subprocess.run(
-                    "pkill -f 'python.*port.*8080'",
+                    "pkill -f 'python.*port.*8083'",
                     shell=True,
                     check=False,
                     stdout=subprocess.DEVNULL,
@@ -376,7 +376,7 @@ async def proxy_client(
 
         config = {
             "host": "0.0.0.0",
-            "port": 8080,
+            "port": 8083,
             "interceptRequests": True,
             "interceptResponses": True,
             "allowedHosts": ["httpbin", "localhost"],
@@ -398,7 +398,7 @@ async def proxy_client(
         try:
             client = AsyncClient(
                 base_url="http://httpbin",
-                proxy="http://0.0.0.0:8080",
+                proxy="http://0.0.0.0:8083",
                 verify=False,
                 follow_redirects=True,
                 timeout=timeout,

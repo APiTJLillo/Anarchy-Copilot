@@ -185,10 +185,10 @@ def test_proxy_config_validation():
     
     # Test valid configuration
     config = ProxyConfig(
-        port=8080,
+        port=8083,
         connection_timeout=30,
         allowed_hosts={"example.com"}
     )
-    assert config.port == 8080
+    assert config.port == 8083
     assert config.connection_timeout == 30
     assert "example.com" in config.allowed_hosts

@@ -9,7 +9,7 @@ async def main():
     """Run example proxy server."""
     config = ProxyConfig(
         host="localhost",
-        port=8080,
+        port=8083,
         ca_cert_path=Path("certs/ca.crt"),
         ca_key_path=Path("certs/ca.key"),
         verify_ssl=False,
@@ -22,7 +22,7 @@ async def main():
 
     try:
         await server.start()
-        print("Proxy server running at http://localhost:8080")
+        print("Proxy server running at http://localhost:8083")
         
         # Keep running until interrupted
         while True:

@@ -66,13 +66,13 @@ echo
 echo "🌐 You can access the application at:"
 echo "   Frontend: http://localhost:3000"
 echo "   Backend API: http://localhost:8000"
-echo "   Proxy Server: http://localhost:8080"
+echo "   Proxy Server: http://localhost:8083"
 echo
 echo "🔧 Proxy Setup Instructions:"
 echo "   1. Import the CA certificate from ./certs/ca.crt into your browser"
 echo "   2. Configure your browser's proxy settings:"
 echo "      - Host: localhost"
-echo "      - Port: 8080"
+echo "      - Port: 8083"
 echo "   3. Visit the web interface and start the proxy from the dashboard"
 echo
 echo "📝 To view logs, use: docker-compose logs -f"

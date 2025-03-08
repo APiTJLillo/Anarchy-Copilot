@@ -129,7 +129,7 @@ def is_valid_port(port: int) -> bool:
     """Check if a port number is valid."""
     return isinstance(port, int) and 0 < port < 65536
 
-def get_free_port(start_port: int = 8080, max_attempts: int = 100) -> Optional[int]:
+def get_free_port(start_port: int = 8083, max_attempts: int = 100) -> Optional[int]:
     """Find a free port starting from start_port."""
     for port in range(start_port, start_port + max_attempts):
         sock = None

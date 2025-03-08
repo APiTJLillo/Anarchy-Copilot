@@ -25,7 +25,7 @@ import OpenSSL
 from cryptography import x509
 import pwd
 from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.x509.oid import NameOID
 
 if TYPE_CHECKING:
@@ -91,6 +91,7 @@ class BaseCertificateManager:
         self._last_health_check = None
         self._cleanup_task = None
         self._monitoring_task = None
+        self._loop = None
         
         # Ensure directory exists with proper permissions
         self._setup_cert_dir()
@@ -138,10 +139,8 @@ class CertificateManager(BaseCertificateManager):
 
     def _init_tasks(self) -> None:
         """Initialize background tasks."""
-        if not self._cleanup_task:
-            self._cleanup_task = asyncio.create_task(self._periodic_cleanup())
-        if not self._monitoring_task:
-            self._monitoring_task = asyncio.create_task(self._periodic_monitoring())
+        # Tasks will be initialized when start() is called
+        pass
 
     def get_context(self, hostname: str, is_server: bool = True) -> ssl.SSLContext:
         """Get SSL context for the given hostname.
@@ -249,21 +248,15 @@ class CertificateManager(BaseCertificateManager):
             if not self.ca.ca_key_path.exists():
                 raise FileNotFoundError(f"CA private key not found: {self.ca.ca_key_path}")
             
-            # Load and validate CA certificate
+            # Load and validate CA certificate using cryptography
             with open(self.ca.ca_cert_path, 'rb') as f:
                 cert_data = f.read()
-                self._ca_cert = OpenSSL.crypto.load_certificate(
-                    OpenSSL.crypto.FILETYPE_PEM,
-                    cert_data
-                )
+                self._ca_cert = x509.load_pem_x509_certificate(cert_data)
             
-            # Load and validate CA private key
+            # Load and validate CA private key using cryptography
             with open(self.ca.ca_key_path, 'rb') as f:
                 key_data = f.read()
-                self._ca_key = OpenSSL.crypto.load_privatekey(
-                    OpenSSL.crypto.FILETYPE_PEM,
-                    key_data
-                )
+                self._ca_key = serialization.load_pem_private_key(key_data, password=None)
             
             # Verify certificate/key pair
             self._verify_ca_pair()
@@ -282,19 +275,31 @@ class CertificateManager(BaseCertificateManager):
     def _verify_ca_pair(self) -> None:
         """Verify CA certificate and private key match."""
         try:
+            # Create test data and sign it
             test_data = b"test"
-            signature = OpenSSL.crypto.sign(self._ca_key, test_data, "sha256")
-            OpenSSL.crypto.verify(self._ca_cert, signature, test_data, "sha256")
-            
-            # Check expiration
-            not_after = datetime.strptime(
-                self._ca_cert.get_notAfter().decode('ascii'),
-                '%Y%m%d%H%M%SZ'
+            signature = self._ca_key.sign(
+                test_data,
+                padding.PKCS1v15(),
+                hashes.SHA256()
             )
-            if not_after < datetime.utcnow():
+
+            # Verify the signature
+            self._ca_cert.public_key().verify(
+                signature,
+                test_data,
+                padding.PKCS1v15(),
+                hashes.SHA256()
+            )
+
+            # Check expiration - convert to UTC for comparison
+            now = datetime.now(self._ca_cert.not_valid_after_utc.tzinfo)
+            if self._ca_cert.not_valid_after_utc < now:
                 raise ValueError("CA certificate has expired")
-                
+
+            logger.debug("CA certificate and private key validated successfully")
+
         except Exception as e:
+            logger.error(f"CA certificate and private key validation failed: {e}")
             raise ValueError(f"CA certificate and private key validation failed: {e}")
 
     def _set_ca_permissions(self) -> None:
@@ -430,6 +435,13 @@ class CertificateManager(BaseCertificateManager):
         except Exception as e:
             logger.error(f"Error during shutdown: {e}")
             raise
+
+    def start(self):
+        """Start the certificate manager with a running event loop."""
+        if self._cleanup_task is None or self._monitoring_task is None:
+            self._loop = asyncio.get_event_loop()
+            self._cleanup_task = self._loop.create_task(self._periodic_cleanup())
+            self._monitoring_task = self._loop.create_task(self._periodic_monitoring())
 
 # Create global instance
 cert_manager = CertificateManager()

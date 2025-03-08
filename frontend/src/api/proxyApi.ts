@@ -169,10 +169,7 @@ const proxyApi = {
     },
 
     async startProxy(sessionId: number, settings: ProxySettings) {
-        const response = await axios.post(`${API_BASE_URL}/api/proxy/start`, {
-            session_id: sessionId,
-            settings
-        });
+        const response = await axios.post(`${API_BASE_URL}/api/proxy/sessions/${sessionId}/start`, settings);
         return response.data;
     },
 

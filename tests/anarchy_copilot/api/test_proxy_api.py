@@ -59,7 +59,7 @@ class TestProxyAPI:
                 # Start the proxy
                 config = {
                     "host": "0.0.0.0",
-                    "port": 8080,
+                    "port": 8083,
                     "interceptRequests": True,
                     "interceptResponses": True,
                     "allowedHosts": ["httpbin", "localhost"],
@@ -138,7 +138,7 @@ class TestProxyAPI:
                 # Start the proxy first
                 config = {
                     "host": "0.0.0.0",
-                    "port": 8080,
+                    "port": 8083,
                     "interceptRequests": True,
                     "interceptResponses": True,
                     "allowedHosts": ["httpbin", "localhost"],

@@ -151,6 +151,40 @@ class StateManager:
         """Check if tunnel is established."""
         return self._tunnel_established
 
+    async def cleanup(self) -> None:
+        """Clean up connection state and resources."""
+        from ..state import proxy_state
+        try:
+            # Reset TLS state
+            self.tls_state.reset()
+            
+            # Clear tunnel state
+            self._tunnel_established = False
+            self._intercept_enabled = False
+            
+            # Remove from global state
+            await proxy_state.remove_connection(self._connection_id)
+            
+            logger.debug(f"[{self._connection_id}] Connection state cleaned up")
+        except Exception as e:
+            logger.error(f"[{self._connection_id}] Error during cleanup: {e}")
+
+    def clear_state(self) -> None:
+        """Clear all state information."""
+        try:
+            # Reset TLS state
+            self.tls_state.reset()
+            
+            # Reset connection flags
+            self._tunnel_established = False
+            self._intercept_enabled = False
+            self._last_error = None
+            self._negotiation_retries = 0
+            
+            logger.debug(f"[{self._connection_id}] State cleared")
+        except Exception as e:
+            logger.error(f"[{self._connection_id}] Error clearing state: {e}")
+
     def parse_client_hello(self, data: bytes) -> None:
         """Parse TLS ClientHello data for state tracking.
         

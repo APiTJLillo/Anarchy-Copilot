@@ -1,13 +1,22 @@
+version: '3.8'
+
 services:
   dev:
     build:
       context: .
       dockerfile: Dockerfile.dev
     volumes:
-      - .:/app
-      - ~/.nuclei:/root/.nuclei
-      - dev-cache:/root/.cache
-    network_mode: "host" # Allow direct access from browser
+      - type: bind
+        source: .
+        target: /app
+      - type: bind
+        source: ~/.nuclei
+        target: /root/.nuclei
+      - type: volume
+        source: dev-cache
+        target: /root/.cache
+    ports:
+      - "8000:8000" # API port
     environment:
       - PYTHONPATH=/app:/app/anarchy-copilot
       - PYTEST_ADDOPTS="-v --import-mode=append"
@@ -19,10 +28,10 @@ services:
       - ANARCHY_API_TITLE=Anarchy Copilot API
       - ANARCHY_API_VERSION=0.1.0
       - ANARCHY_DEBUG=true
-      - ANARCHY_CORS_ORIGINS=http://localhost:3000
+      - ANARCHY_CORS_ORIGINS=http://localhost:3000,ws://localhost:3000,http://localhost:8000,ws://localhost:8000
       # Proxy Settings
       - ANARCHY_PROXY_HOST=0.0.0.0
-      - ANARCHY_PROXY_PORT=8081
+      - ANARCHY_PROXY_PORT=8083
       - ANARCHY_PROXY_INTERCEPT_REQUESTS=true
       - ANARCHY_PROXY_INTERCEPT_RESPONSES=true
       - ANARCHY_PROXY_MAX_CONNECTIONS=100
@@ -30,7 +39,8 @@ services:
       - ANARCHY_PROXY_KEEPALIVE_TIMEOUT=30
     env_file:
       - .env
-    command: [ "/usr/local/bin/dev-entrypoint.sh", "start" ]
+    entrypoint: [ "/usr/local/bin/dev-entrypoint.sh" ]
+    command: [ "start" ]
     healthcheck:
       test: [ "CMD", "/usr/local/bin/healthcheck.sh" ]
       interval: 5s
@@ -42,52 +52,42 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dev
+    command: start
     volumes:
       - .:/app
-      - ./certs:/app/certs
+      - dev-cache:/root/.cache
+      - proxy-certs:/app/certs
       - proxy-data:/app/data
-    environment:
-      - PYTHONPATH=/app:/app/anarchy-copilot
-      - PYTHONDONTWRITEBYTECODE=1
-      - PYTHONUNBUFFERED=1
-      # API Settings
-      - ANARCHY_API_TITLE=Anarchy Copilot API
-      - ANARCHY_API_VERSION=0.1.0
-      - ANARCHY_DEBUG=true
-      - ANARCHY_CORS_ORIGINS=http://localhost:3000
-      # Proxy Settings
-      - ANARCHY_PROXY_HOST=0.0.0.0
-      - ANARCHY_PROXY_PORT=8081
-      - ANARCHY_PROXY_INTERCEPT_REQUESTS=true
-      - ANARCHY_PROXY_INTERCEPT_RESPONSES=true
-      - ANARCHY_PROXY_MAX_CONNECTIONS=100
-      - ANARCHY_PROXY_MAX_KEEPALIVE_CONNECTIONS=20
-      - ANARCHY_PROXY_KEEPALIVE_TIMEOUT=30
-      # Certificate Settings
-      - CA_CERT_PATH=/app/certs/ca.crt
-      - CA_KEY_PATH=/app/certs/ca.key
-    network_mode: "host" # Allow direct external connections for proxy traffic
-    dns:
-      - 8.8.8.8 # Use Google's DNS
-      - 1.1.1.1 # Use Cloudflare's DNS as backup
-    command: >
-      python -m debugpy --listen 0.0.0.0:5679 -m uvicorn proxy.server.asgi:app  --host 0.0.0.0  --port 8080  --reload  --reload-delay 2  --log-level debug  --proxy-headers  --timeout-keep-alive 75  --forwarded-allow-ips '*'  --lifespan on  --use-colors  --loop asyncio
     ports:
-      - "8080:8080"
-      - "8081:8081"
+      - "8083:8083"
+      - "5678:5678" # Debug port
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+      - DEBUG=1
+    healthcheck:
+      test: [ "CMD", "/usr/local/bin/healthcheck.sh" ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile.frontend
     volumes:
-      - ./frontend:/app
-      - frontend-node-modules:/app/node_modules
-    network_mode: "host" # Allow direct browser access
+      - type: bind
+        source: ./frontend
+        target: /app
+      - type: volume
+        source: frontend-node-modules
+        target: /app/node_modules
+    ports:
+      - "3000:3000"
     environment:
       - NODE_ENV=development
       - REACT_APP_API_BASE_URL=http://localhost:8000
-      - REACT_APP_PROXY_URL=http://localhost:8081
+      - REACT_APP_PROXY_URL=http://localhost:8083
       - PORT=3000 # Set explicit port for React dev server
       - WDS_SOCKET_PORT=3000
     depends_on:
@@ -101,10 +101,6 @@ services:
       timeout: 5s
       retries: 3
       start_period: 30s
-
-networks:
-  anarchy:
-    driver: bridge
 
 volumes:
   dev-cache:

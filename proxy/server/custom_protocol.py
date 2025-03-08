@@ -257,9 +257,26 @@ class TunnelProtocol(H11Protocol):
             "status": "initialized"
         }
         self._active_connections[self._connection_id] = conn_info
-        
-        # Add to state tracking
-        asyncio.create_task(proxy_state.add_connection(self._connection_id, conn_info))
+
+        # Get active session and associate with connection
+        async def init_connection():
+            try:
+                async with AsyncSessionLocal() as db:
+                    result = await db.execute(
+                        text("SELECT * FROM proxy_sessions WHERE is_active = true ORDER BY start_time DESC LIMIT 1")
+                    )
+                    active_session = result.first()
+                    if active_session:
+                        conn_info["session_id"] = active_session.id
+                        logger.debug(f"[{self._connection_id}] Associated with session {active_session.id}")
+            except Exception as e:
+                logger.error(f"[{self._connection_id}] Failed to get active session: {e}")
+            
+            # Add to state tracking
+            await proxy_state.add_connection(self._connection_id, conn_info)
+
+        # Schedule connection initialization
+        asyncio.create_task(init_connection())
 
     async def _handle_large_write(self) -> None:
         """Handle flow control for large writes."""
@@ -429,46 +446,75 @@ class TunnelProtocol(H11Protocol):
     async def _create_history_entry(self, host: str, port: int) -> None:
         """Create a history entry for this connection."""
         try:
-            async with AsyncSessionLocal() as session:
-                # Create new history entry
-                entry = ProxyHistoryEntry(
-                    connection_id=self._connection_id,
-                    host=host,
-                    port=port,
-                    start_time=self._tunnel_start_time,
-                    headers=self._connect_headers,
-                    is_tls=True,
-                    status="active"
-                )
-                session.add(entry)
-                await session.commit()
-                await session.refresh(entry)
-                self._history_entry_id = entry.id
-                log_connection(self._connection_id, f"Created history entry {entry.id}")
+            if self._connection_id in self._active_connections:
+                conn_info = self._active_connections[self._connection_id]
+                session_id = conn_info.get("session_id")
+                
+                if session_id:
+                    async with AsyncSessionLocal() as db:
+                        history_entry = ProxyHistoryEntry(
+                            session_id=session_id,
+                            timestamp=datetime.utcnow(),
+                            method="CONNECT",
+                            url=f"{host}:{port}",
+                            request_headers=self._connect_headers,
+                            request_body=None,
+                            response_status=200,
+                            response_headers={"Connection": "Upgrade"},
+                            response_body=None,
+                            duration=0,  # Will be updated when connection closes
+                            is_intercepted=False,
+                            tags=[],
+                            notes=None
+                        )
+                        db.add(history_entry)
+                        await db.commit()
+                        await db.refresh(history_entry)
+                        self._history_entry_id = history_entry.id
+                        logger.debug(f"[{self._connection_id}] Created history entry {history_entry.id}")
+                else:
+                    logger.warning(f"[{self._connection_id}] No active session found for connection")
         except Exception as e:
             logger.error(f"[{self._connection_id}] Failed to create history entry: {e}")
 
     async def _update_history_duration(self) -> None:
-        """Update the duration in the history entry."""
-        if not self._history_entry_id or not self._tunnel_start_time:
-            return
-
-        try:
-            async with AsyncSessionLocal() as session:
-                # Get the entry
-                stmt = select(ProxyHistoryEntry).where(ProxyHistoryEntry.id == self._history_entry_id)
-                result = await session.execute(stmt)
-                entry = result.scalar_one_or_none()
-                
-                if entry:
-                    # Update duration and status
-                    entry.end_time = datetime.utcnow()
-                    entry.duration = (entry.end_time - self._tunnel_start_time).total_seconds()
-                    entry.status = "closed"
-                    await session.commit()
-                    log_connection(self._connection_id, f"Updated history entry {entry.id} duration")
-        except Exception as e:
-            logger.error(f"[{self._connection_id}] Failed to update history duration: {e}")
+        """Update the duration of the history entry."""
+        if self._history_entry_id:
+            try:
+                async with AsyncSessionLocal() as db:
+                    # Get the history entry
+                    result = await db.execute(
+                        text("SELECT * FROM proxy_history_entries WHERE id = :id"),
+                        {"id": self._history_entry_id}
+                    )
+                    history_entry = result.first()
+                    
+                    if history_entry:
+                        # Calculate duration
+                        duration = (datetime.utcnow() - history_entry.timestamp).total_seconds()
+                        
+                        # Update the entry
+                        await db.execute(
+                            text("""
+                                UPDATE proxy_history_entries 
+                                SET duration = :duration,
+                                    response_status = :status,
+                                    bytes_received = :bytes_received,
+                                    bytes_sent = :bytes_sent
+                                WHERE id = :id
+                            """),
+                            {
+                                "id": self._history_entry_id,
+                                "duration": duration,
+                                "status": 200,
+                                "bytes_received": self._bytes_received,
+                                "bytes_sent": self._bytes_sent
+                            }
+                        )
+                        await db.commit()
+                        logger.debug(f"[{self._connection_id}] Updated history entry {self._history_entry_id} duration to {duration:.2f}s")
+            except Exception as e:
+                logger.error(f"[{self._connection_id}] Failed to update history duration: {e}")
 
     def _parse_authority(self, authority: str) -> Tuple[str, int]:
         """Parse host and port from authority string."""

@@ -5,6 +5,8 @@ FastAPI application initialization and configuration.
 from version import __version__
 
 import logging
+import os
+from pathlib import Path
 from typing import Dict, Any, Optional
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -116,14 +118,65 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> FastAPI:
         # Initialize proxy settings
         settings = Settings()
         try:
+            # Docker container paths should be checked first
+            docker_paths = [
+                # Docker container path - this is where certificates are mounted in Docker
+                (Path("/app/certs/ca.crt"), Path("/app/certs/ca.key")),
+                # Alternative paths that might be used in Docker
+                (Path("/certs/ca.crt"), Path("/certs/ca.key")),
+            ]
+            
+            # Local development paths
+            base_dir = Path(__file__).parent.parent
+            local_paths = [
+                (base_dir / "certs" / "ca.crt", base_dir / "certs" / "ca.key"),
+                (base_dir / "ca.crt", base_dir / "ca.key"),
+                (base_dir / "test_ca.crt", base_dir / "test_ca.key"),
+            ]
+            
+            # Combine all possible paths, checking Docker paths first
+            cert_locations = docker_paths + local_paths
+            
+            ca_cert_path = None
+            ca_key_path = None
+            
+            # Find the first existing pair of certificate files
+            for cert_path, key_path in cert_locations:
+                if cert_path.exists() and key_path.exists():
+                    ca_cert_path = cert_path
+                    ca_key_path = key_path
+                    logger.info(f"Using CA certificate files: {ca_cert_path}, {ca_key_path}")
+                    break
+            
+            if ca_cert_path is None or ca_key_path is None:
+                logger.warning("CA certificate files not found. HTTPS interception will be disabled.")
+                # Check permissions on directories where we expected certificates
+                for dir_path in [Path("/app/certs"), Path("/certs"), base_dir / "certs"]:
+                    if dir_path.exists():
+                        try:
+                            logger.info(f"Directory {dir_path} exists, checking contents:")
+                            for item in dir_path.iterdir():
+                                logger.info(f"  - {item}")
+                        except PermissionError:
+                            logger.warning(f"Permission denied when checking directory: {dir_path}")
+            
+            # Configure proxy server with CA certificate paths if found
             from proxy.server import proxy_server
-            proxy_server.configure({
+            proxy_config = {
                 'host': settings.proxy_host,
                 'port': settings.proxy_port,
                 'max_connections': settings.proxy_max_connections,
                 'max_keepalive_connections': settings.proxy_max_keepalive_connections,
                 'keepalive_timeout': settings.proxy_keepalive_timeout,
-            })
+            }
+            
+            # Add CA certificate paths if found
+            if ca_cert_path and ca_key_path:
+                proxy_config['ca_cert_path'] = ca_cert_path
+                proxy_config['ca_key_path'] = ca_key_path
+                logger.info("HTTPS interception will be enabled with the provided CA certificates")
+            
+            proxy_server.configure(proxy_config)
             logger.info("Initialized proxy settings")
         except Exception as e:
             logger.error(f"Failed to initialize proxy settings: {e}")

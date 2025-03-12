@@ -10,10 +10,9 @@ import os
 import ssl
 import stat
 from contextlib import suppress
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Dict, Optional, Tuple, Any, TYPE_CHECKING, Set, NamedTuple, Union, Literal, List
-from typing_extensions import TypedDict
+from typing import Dict, Optional, Tuple, Any, TYPE_CHECKING, Set, NamedTuple, Union, Literal, List, TypedDict
 from dataclasses import dataclass
 from functools import wraps
 import inspect
@@ -23,10 +22,10 @@ import heapq
 
 import OpenSSL
 from cryptography import x509
-import pwd
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.x509.oid import NameOID
+from cryptography.hazmat.backends import default_backend
 
 if TYPE_CHECKING:
     from .certificates import CertificateAuthority
@@ -126,34 +125,50 @@ class CertificateManager(BaseCertificateManager):
         self.ca = ca
         self._ca_cert = None
         self._ca_key = None
+        self._is_running = False
         
         if ca:
             try:
                 self._load_ca()
+                logger.info("Certificate Authority loaded successfully")
             except Exception as e:
                 logger.error(f"Failed to load CA during initialization: {e}")
-                raise
+                self.ca = None
+                logger.warning("HTTPS interception will be disabled")
 
-        # Start background tasks
-        self._init_tasks()
+        # Initialize tasks as None, they'll be created when start() is called
+        self._cleanup_task = None
+        self._monitoring_task = None
+        self._loop = None
 
     def _init_tasks(self) -> None:
-        """Initialize background tasks."""
-        # Tasks will be initialized when start() is called
-        pass
+        """Initialize background tasks.
+        
+        This sets up the task references but doesn't start them.
+        The actual tasks are created and started in the start() method.
+        """
+        if self._cleanup_task is None and self._monitoring_task is None:
+            logger.debug("Task references initialized")
 
-    def get_context(self, hostname: str, is_server: bool = True) -> ssl.SSLContext:
-        """Get SSL context for the given hostname.
-
-        Args:
-            hostname: The hostname to create context for
-            is_server: Whether to create a server or client context
-
+    def is_running(self) -> bool:
+        """Check if the certificate manager is running.
+        
         Returns:
-            ssl.SSLContext: Configured SSL context with loaded certificate
+            bool: True if running, False otherwise
+        """
+        return self._is_running
 
+    async def get_context(self, hostname: str, is_server: bool = True) -> ssl.SSLContext:
+        """Get SSL context for the given hostname.
+        
+        Args:
+            hostname: The hostname to get SSL context for
+            is_server: Whether this is a server-side context
+            
+        Returns:
+            ssl.SSLContext: Configured SSL context
+            
         Raises:
-            CANotInitializedError: If CA is not properly initialized
             RuntimeError: If context creation fails
         """
         cache_key = f"{'server' if is_server else 'client'}_{hostname}"
@@ -161,7 +176,7 @@ class CertificateManager(BaseCertificateManager):
             return self._contexts[cache_key]
 
         try:
-            cert_path, key_path = self.get_cert_pair(hostname)
+            cert_path, key_path = await self.get_cert_pair(hostname)
             
             # Create appropriate context type
             if is_server:
@@ -173,7 +188,7 @@ class CertificateManager(BaseCertificateManager):
                 context.verify_mode = ssl.CERT_NONE
             
             # Load CA cert separately for verification if needed
-            if self._ca_cert and hasattr(self.ca, 'ca_cert_path'):
+            if self._ca_cert and self.ca and self.ca.ca_cert_path:
                 context.load_verify_locations(cafile=str(self.ca.ca_cert_path))
             
             # Configure modern TLS settings
@@ -212,14 +227,14 @@ class CertificateManager(BaseCertificateManager):
             logger.error(f"Failed to set CA: {e}")
             raise RuntimeError(f"Failed to set CA: {e}")
 
-    def get_cert_pair(self, hostname: str) -> Tuple[str, str]:
+    async def get_cert_pair(self, hostname: str) -> Tuple[str, str]:
         """Get certificate path for a given hostname.
 
         Args:
             hostname: The hostname to get certificate for
 
         Returns:
-            str: Path to the certificate file
+            Tuple[str, str]: Tuple of (cert_path, key_path)
 
         Raises:
             CANotInitializedError: If CA is not properly initialized
@@ -229,7 +244,7 @@ class CertificateManager(BaseCertificateManager):
             raise CANotInitializedError("No CA provided")
 
         try:
-            cert_path, key_path = self.ca.get_certificate(hostname)
+            cert_path, key_path = await self.ca.get_certificate(hostname)
             if not os.path.exists(cert_path) or not os.path.exists(key_path):
                 raise FileNotFoundError(f"Certificate or key file missing for {hostname}")
             return cert_path, key_path
@@ -240,23 +255,38 @@ class CertificateManager(BaseCertificateManager):
     def _load_ca(self) -> None:
         """Load CA certificate and private key."""
         if not self.ca:
+            logger.error("No CA instance provided")
             raise CANotInitializedError("No CA provided")
 
+        logger.debug(f"Loading CA with cert_path={self.ca.ca_cert_path}, key_path={self.ca.ca_key_path}")
         try:
-            if not self.ca.ca_cert_path.exists():
+            if not os.path.exists(self.ca.ca_cert_path):
+                logger.error(f"CA certificate file not found at: {self.ca.ca_cert_path}")
                 raise FileNotFoundError(f"CA certificate not found: {self.ca.ca_cert_path}")
-            if not self.ca.ca_key_path.exists():
+            else:
+                logger.debug(f"Found CA certificate at {self.ca.ca_cert_path}")
+                
+            if not os.path.exists(self.ca.ca_key_path):
+                logger.error(f"CA key file not found at: {self.ca.ca_key_path}")
                 raise FileNotFoundError(f"CA private key not found: {self.ca.ca_key_path}")
+            else:
+                logger.debug(f"Found CA key at {self.ca.ca_key_path}")
             
             # Load and validate CA certificate using cryptography
+            logger.debug("Loading CA certificate...")
             with open(self.ca.ca_cert_path, 'rb') as f:
                 cert_data = f.read()
+                logger.debug(f"Read {len(cert_data)} bytes from certificate file")
                 self._ca_cert = x509.load_pem_x509_certificate(cert_data)
+                logger.debug("Successfully loaded CA certificate")
             
             # Load and validate CA private key using cryptography
+            logger.debug("Loading CA private key...")
             with open(self.ca.ca_key_path, 'rb') as f:
                 key_data = f.read()
+                logger.debug(f"Read {len(key_data)} bytes from key file")
                 self._ca_key = serialization.load_pem_private_key(key_data, password=None)
+                logger.debug("Successfully loaded CA private key")
             
             # Verify certificate/key pair
             self._verify_ca_pair()
@@ -274,7 +304,13 @@ class CertificateManager(BaseCertificateManager):
 
     def _verify_ca_pair(self) -> None:
         """Verify CA certificate and private key match."""
+        logger.debug("Starting CA certificate/key pair verification...")
+        if not self._ca_key or not self._ca_cert:
+            logger.error("CA certificate or key not loaded before verification")
+            raise ValueError("CA certificate or key not loaded")
+
         try:
+            logger.debug("Testing key pair by signing test data...")
             # Create test data and sign it
             test_data = b"test"
             signature = self._ca_key.sign(
@@ -292,8 +328,15 @@ class CertificateManager(BaseCertificateManager):
             )
 
             # Check expiration - convert to UTC for comparison
-            now = datetime.now(self._ca_cert.not_valid_after_utc.tzinfo)
-            if self._ca_cert.not_valid_after_utc < now:
+            # Safely get expiration time
+            expiry = getattr(self._ca_cert, 'not_valid_after_utc', None)
+            if not expiry:
+                expiry = self._ca_cert.not_valid_after
+            if not expiry:
+                raise ValueError("Could not determine certificate expiration")
+
+            now = datetime.now(timezone.utc)
+            if expiry < now:
                 raise ValueError("CA certificate has expired")
 
             logger.debug("CA certificate and private key validated successfully")
@@ -304,9 +347,14 @@ class CertificateManager(BaseCertificateManager):
 
     def _set_ca_permissions(self) -> None:
         """Set secure permissions for CA files."""
+        if not self.ca:
+            raise CANotInitializedError("No CA provided")
+
         try:
-            os.chmod(self.ca.ca_cert_path, 0o644)  # rw-r--r--
-            os.chmod(self.ca.ca_key_path, 0o600)   # rw-------
+            if hasattr(self.ca, 'ca_cert_path'):
+                os.chmod(self.ca.ca_cert_path, 0o644)  # rw-r--r--
+            if hasattr(self.ca, 'ca_key_path'):
+                os.chmod(self.ca.ca_key_path, 0o600)   # rw-------
         except Exception as e:
             logger.error(f"Failed to set CA file permissions: {e}")
             raise
@@ -387,10 +435,22 @@ class CertificateManager(BaseCertificateManager):
             CertificateHealth: Current health status and details
         """
         now = datetime.utcnow()
+        
+        # Check if CA is fully initialized
+        ca_initialized = bool(self.ca and self._ca_cert and self._ca_key)
+        
+        # Count actual certificates in cache directory
+        total_certs = 0
+        try:
+            if self.cert_cache_dir.exists():
+                total_certs = len([f for f in self.cert_cache_dir.glob("*.crt")])
+        except Exception as e:
+            logger.warning(f"Error counting certificates: {e}")
+
         details = {
-            "total_certificates": len(self._cert_cache),
+            "total_certificates": total_certs,
             "cached_contexts": len(self._contexts),
-            "ca_initialized": bool(self.ca),
+            "ca_initialized": ca_initialized,
             "stats": {
                 "total_generated": self._stats.total_generated,
                 "cache_hits": self._stats.cache_hits,
@@ -402,8 +462,10 @@ class CertificateManager(BaseCertificateManager):
 
         # Determine health status
         status: HealthStatus = "healthy"
-        if not self.ca:
+        if not ca_initialized:
             status = "critical"
+            self._last_error = "CA not fully initialized"
+            self._last_error_time = now
         elif self._last_error and (now - self._last_error_time < timedelta(minutes=5)):
             status = "error"
         elif self._stats.generation_failures > 0:
@@ -428,6 +490,8 @@ class CertificateManager(BaseCertificateManager):
                 with suppress(asyncio.CancelledError):
                     await task
 
+        self._is_running = False
+
         # Final cleanup
         try:
             await self.cleanup_old_certs(max_age=0)  # Clean all certificates
@@ -436,12 +500,193 @@ class CertificateManager(BaseCertificateManager):
             logger.error(f"Error during shutdown: {e}")
             raise
 
-    def start(self):
-        """Start the certificate manager with a running event loop."""
-        if self._cleanup_task is None or self._monitoring_task is None:
-            self._loop = asyncio.get_event_loop()
-            self._cleanup_task = self._loop.create_task(self._periodic_cleanup())
-            self._monitoring_task = self._loop.create_task(self._periodic_monitoring())
+    async def start(self, loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
+        """Start the certificate manager with the provided or current event loop."""
+        if self._is_running:
+            logger.debug("Certificate manager already running, skipping start")
+            return
+
+        logger.debug("Starting certificate manager...")
+        try:
+            # Get existing loop or current loop - don't create a new one
+            if loop:
+                self._loop = loop
+                logger.debug(f"Using provided event loop: {loop}")
+            else:
+                self._loop = asyncio.get_running_loop()
+                logger.debug("Using current event loop")
+            
+            # Initialize CA if needed
+            if self.ca:
+                logger.debug(f"Initializing CA with cert_path={self.ca.ca_cert_path}, key_path={self.ca.ca_key_path}")
+                try:
+                    # Load CA first - this initializes self._ca_cert and self._ca_key
+                    logger.info("Starting CA initialization...")
+                    try:
+                        self._load_ca()
+                        logger.info("CA certificates loaded successfully")
+
+                        # Verify certificates are valid
+                        if not self._ca_cert or not self._ca_key:
+                            raise CANotInitializedError("CA certificate or key not loaded")
+                        if not isinstance(self._ca_cert, x509.Certificate):
+                            raise CANotInitializedError("Invalid CA certificate type")
+                        if not isinstance(self._ca_key, rsa.RSAPrivateKey):
+                            raise CANotInitializedError("Invalid CA key type")
+
+                        # Ensure CA is started
+                        if hasattr(self.ca, 'start'):
+                            logger.info("Starting CA service...")
+                            await self.ca.start()
+                            logger.info("CA service started successfully")
+                            
+                        # Verify CA is working by generating and verifying a test certificate
+                        logger.info("Testing certificate generation...")
+                        test_hostname = "test.local"
+                        test_start = time.time()
+                        cert_path, key_path = await self.ca.get_certificate(test_hostname)
+                        test_duration = time.time() - test_start
+                        logger.info(f"Test certificate generated in {test_duration:.2f} seconds")
+
+                        # Verify test certificate was created
+                        if not os.path.exists(cert_path):
+                            raise RuntimeError(f"Test certificate not found at {cert_path}")
+                        if not os.path.exists(key_path):
+                            raise RuntimeError(f"Test key not found at {key_path}")
+
+                        # Load and verify test certificate
+                        logger.info("Verifying test certificate...")
+                        test_cert_data = None
+                        with open(cert_path, 'rb') as f:
+                            test_cert_data = f.read()
+                        test_cert = x509.load_pem_x509_certificate(test_cert_data)
+
+                        # Verify test certificate properties
+                        test_cn = test_cert.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value
+                        if test_cn != test_hostname:
+                            raise RuntimeError(f"Test certificate CN mismatch: {test_cn} != {test_hostname}")
+                        
+                        # Verify certificate signature using CA public key
+                        try:
+                            # Get CA public key for verification
+                            ca_public_key = self._ca_cert.public_key()
+                            
+                            # Get the signature algorithm and hash algorithm from the certificate
+                            signature_algorithm = test_cert.signature_algorithm_oid
+                            if signature_algorithm == x509.SignatureAlgorithmOID.RSA_WITH_SHA256:
+                                hash_algorithm = hashes.SHA256()
+                            elif signature_algorithm == x509.SignatureAlgorithmOID.RSA_WITH_SHA384:
+                                hash_algorithm = hashes.SHA384()
+                            elif signature_algorithm == x509.SignatureAlgorithmOID.RSA_WITH_SHA512:
+                                hash_algorithm = hashes.SHA512()
+                            else:
+                                raise RuntimeError(f"Unsupported signature algorithm: {signature_algorithm}")
+                            
+                            # Verify the test certificate was signed by our CA
+                            ca_public_key.verify(
+                                test_cert.signature,
+                                test_cert.tbs_certificate_bytes,
+                                padding.PKCS1v15(),
+                                hash_algorithm
+                            )
+                            
+                            # Additional verification steps
+                            now = datetime.now(timezone.utc)
+                            if test_cert.not_valid_before_utc > now or test_cert.not_valid_after_utc < now:
+                                raise RuntimeError("Test certificate has invalid validity period")
+                            
+                            if test_cert.issuer != self._ca_cert.subject:
+                                raise RuntimeError("Test certificate issuer does not match CA subject")
+                                
+                            logger.info("Test certificate signature and validity verified successfully")
+                        except Exception as e:
+                            logger.error(f"Test certificate verification failed: {str(e)}")
+                            logger.debug("Test certificate details:", extra={
+                                'subject': str(test_cert.subject),
+                                'issuer': str(test_cert.issuer),
+                                'not_before': str(test_cert.not_valid_before),
+                                'not_after': str(test_cert.not_valid_after)
+                            })
+                            raise RuntimeError(f"Certificate verification failed: {e}")
+
+                        # Clean up test certificate
+                        try:
+                            os.unlink(cert_path)
+                            os.unlink(key_path)
+                            logger.info("Test certificate cleanup successful")
+                        except Exception as e:
+                            logger.warning(f"Failed to clean up test certificate: {e}")
+
+                        logger.info("CA initialization and verification completed successfully")
+
+                    except Exception as e:
+                        logger.error(f"CA initialization failed: {str(e)}\n{traceback.format_exc()}")
+                        self.ca = None
+                        self._ca_cert = None
+                        self._ca_key = None
+                        raise RuntimeError(f"CA initialization failed: {e}")
+                        
+                except Exception as e:
+                    logger.error(f"Failed to initialize CA during start: {e}")
+                    self.ca = None
+                    self._ca_cert = None
+                    self._ca_key = None
+                    raise
+
+            # Only create tasks if they don't exist
+            if not self._cleanup_task or self._cleanup_task.done():
+                self._cleanup_task = self._loop.create_task(self._periodic_cleanup())
+            if not self._monitoring_task or self._monitoring_task.done():
+                self._monitoring_task = self._loop.create_task(self._periodic_monitoring())
+            
+            logger.debug("Started certificate manager background tasks")
+            self._is_running = True
+            logger.info("Certificate manager started")
+            
+        except Exception as e:
+            logger.error(f"Failed to start certificate manager: {e}")
+            raise
+
+    def verify_with_backend(self, test_cert: x509.Certificate) -> bool:
+        """Verify a test certificate using the CA's public key."""
+        try:
+            if not self._ca_cert:
+                raise ValueError("CA certificate not loaded")
+                
+            ca_public_key = self._ca_cert.public_key()
+            
+            # Get the signature algorithm OID
+            signature_algorithm_oid = test_cert.signature_algorithm_oid._name
+            logger.debug(f"Verifying certificate with signature algorithm: {signature_algorithm_oid}")
+            
+            # Map signature algorithm to hash algorithm
+            hash_algorithm = None
+            if "sha256" in signature_algorithm_oid.lower():
+                hash_algorithm = hashes.SHA256()
+            elif "sha384" in signature_algorithm_oid.lower():
+                hash_algorithm = hashes.SHA384()
+            elif "sha512" in signature_algorithm_oid.lower():
+                hash_algorithm = hashes.SHA512()
+            else:
+                raise ValueError(f"Unsupported signature algorithm: {signature_algorithm_oid}")
+            
+            # Verify the certificate
+            try:
+                ca_public_key.verify(
+                    test_cert.signature,
+                    test_cert.tbs_certificate_bytes,
+                    padding.PKCS1v15(),
+                    hash_algorithm
+                )
+                logger.debug("Certificate verification successful")
+                return True
+            except Exception as e:
+                logger.error(f"Certificate verification failed: {e}", exc_info=True)
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error during certificate verification: {e}", exc_info=True)
+            return False
 
 # Create global instance
 cert_manager = CertificateManager()

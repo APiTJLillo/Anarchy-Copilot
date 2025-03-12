@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ..config import ProxyConfig
 from .proxy_server import ProxyServer
+from .certificates import CertificateAuthority
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +36,28 @@ async def main():
     config.port = 8083
     config.history_size = 1000
     config.websocket_support = True
+    
+    # Set certificate paths - these should be mapped in the container
+    config.ca_cert_path = Path("/app/certs/ca.crt")
+    config.ca_key_path = Path("/app/certs/ca.key")
+
+    # Initialize CA
+    try:
+        if not config.ca_cert_path.exists() or not config.ca_key_path.exists():
+            logger.error(f"CA certificate files not found at {config.ca_cert_path} and {config.ca_key_path}")
+            logger.error("Please ensure the certificate files are mounted in the container")
+            sys.exit(1)
+            
+        ca = CertificateAuthority(
+            ca_cert_path=config.ca_cert_path,
+            ca_key_path=config.ca_key_path
+        )
+    except Exception as e:
+        logger.error(f"Failed to initialize CA: {e}")
+        sys.exit(1)
 
     # Create and start server
-    server = ProxyServer(config)
+    server = ProxyServer(config=config, ca_instance=ca)
     try:
         await server.start()
         await asyncio.Event().wait()  # Keep the server running

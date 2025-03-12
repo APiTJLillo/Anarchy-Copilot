@@ -3,7 +3,7 @@ import asyncio
 import ssl
 import logging
 from typing import Optional, Union, Any, Dict
-from async_timeout import timeout as async_timeout
+from async_timeout import timeout
 import collections
 import time
 

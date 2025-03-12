@@ -10,10 +10,58 @@ from typing import Dict, List, Optional, Tuple, AsyncContextManager
 from collections import deque
 import uuid
 import re
+import json
 import aiohttp
+import logging
+import asyncio
 from contextlib import asynccontextmanager
+from sqlalchemy import text, create_engine
+from sqlalchemy.orm import sessionmaker
 
 from .interceptor import InterceptedRequest, InterceptedResponse
+from database import AsyncSessionLocal, SQLALCHEMY_DATABASE_URL
+
+logger = logging.getLogger(__name__)
+
+async def get_active_sessions() -> List[dict]:
+    """Get currently active proxy sessions.
+    
+    Returns:
+        List of active session dictionaries containing:
+        - id: Session ID
+        - name: Session name
+        - start_time: Session start time (as string)
+        - project_id: Associated project ID
+        - created_by: User ID who created the session
+        - settings: Session settings dictionary
+    """
+    try:
+        async with AsyncSessionLocal() as db:
+            result = await db.execute(
+                text("""
+                    SELECT id, name, start_time, project_id, created_by, settings
+                    FROM proxy_sessions 
+                    WHERE is_active = true 
+                    ORDER BY start_time DESC
+                """)
+            )
+            sessions = result.fetchall()
+            logger.info(f"Found {len(sessions)} active proxy sessions")
+            
+            return [
+                {
+                    "id": session.id,
+                    "name": session.name,
+                    "start_time": str(session.start_time),  # Convert timestamp to string
+                    "project_id": session.project_id,
+                    "created_by": session.created_by,
+                    "settings": json.loads(session.settings) if isinstance(session.settings, str) else session.settings or {}
+                }
+                for session in sessions
+            ]
+    except Exception as e:
+        logger.error(f"Failed to get active sessions: {e}")
+        return []
 
 @dataclass(eq=True)
 class HistoryEntry:

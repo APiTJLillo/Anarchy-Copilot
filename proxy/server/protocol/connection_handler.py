@@ -4,7 +4,7 @@ import logging
 import socket
 import ssl
 from typing import Optional, Dict, Any, Tuple
-from async_timeout import timeout as async_timeout
+from async_timeout import timeout
 
 logger = logging.getLogger("proxy.core")
 

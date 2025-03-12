@@ -2,7 +2,7 @@
 import asyncio
 import logging
 from typing import Optional, Any
-from async_timeout import timeout as async_timeout
+from async_timeout import timeout
 
 logger = logging.getLogger("proxy.core")
 
@@ -78,7 +78,7 @@ class BufferManager:
             # Set timeout based on data size with more reasonable minimum
             timeout_seconds = max(60, len(data) / 16384)  # Increased base timeout
             
-            async with async_timeout(timeout_seconds):
+            async with timeout(timeout_seconds):
                 async with self._write_lock:
                     offset = 0
                     total = len(data)

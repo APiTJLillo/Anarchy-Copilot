@@ -1,12 +1,15 @@
 """User management API endpoints."""
 import logging
-from typing import List
+from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
+from sqlalchemy import func, update
+from datetime import datetime
 
 from database import get_async_session
-from models.base import User
+from . import models
+from models.core import User
 from .models import UserResponse, CreateUser, UpdateUser
 
 router = APIRouter()

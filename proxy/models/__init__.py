@@ -1,13 +1,5 @@
-"""Models for the proxy server implementation."""
-
-from .server_state import ServerState
-from .ssl_context import SSLContextManager
-from .connection import ProxyConnection
+"""Proxy models package."""
+from .proxy_types import ProxySessionData, SessionSettings
 from .server import ProxyServer
 
-__all__ = [
-    'ServerState',
-    'SSLContextManager', 
-    'ProxyConnection',
-    'ProxyServer'
-]
+__all__ = ['ProxySessionData', 'SessionSettings', 'ProxyServer']

@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     Environment variables are prefixed with ANARCHY_ and can be:
     - Simple values: ANARCHY_DEBUG=true
     - Comma-separated lists: ANARCHY_CORS_ORIGINS=http://localhost:3000,http://localhost:8000
+    - File paths: ANARCHY_CA_CERT_PATH=./certs/ca.crt
     """
     # API Settings
     api_title: str = "Anarchy Copilot API"
@@ -44,6 +45,18 @@ class Settings(BaseSettings):
     proxy_max_connections: int = 100
     proxy_max_keepalive_connections: int = 20
     proxy_keepalive_timeout: int = 30
+    
+    # Certificate Settings
+    ca_cert_path: str = Field(
+        default="./certs/ca.crt",
+        description="Path to CA certificate file",
+        env="CA_CERT_PATH"
+    )
+    ca_key_path: str = Field(
+        default="./certs/ca.key",
+        description="Path to CA private key file",
+        env="CA_KEY_PATH"
+    )
 
     # AI Settings
     ai_model: str = Field(

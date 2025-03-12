@@ -23,7 +23,7 @@ from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
 
-from database import get_async_session as get_db
+from database.session import get_db
 from . import models
 from .database_models import (
     ProxySession,
@@ -31,11 +31,16 @@ from .database_models import (
     ProxyAnalysisResult,
     InterceptionRule
 )
+from models.proxy import ProxyHistoryEntry
 
 import logging
+import os
 from functools import lru_cache
+from pathlib import Path
 from ..config import Settings
 from sqlalchemy.future import select
+from proxy.server.certificates import CertificateAuthority
+from proxy.config import ProxyConfig
 
 
 @lru_cache()
@@ -79,7 +84,10 @@ async def create_session(
             "maxConnections": config.proxy_max_connections,
             "maxKeepaliveConnections": config.proxy_max_keepalive_connections,
             "keepaliveTimeout": config.proxy_keepalive_timeout,
+            "ca_cert_path": config.ca_cert_path,
+            "ca_key_path": config.ca_key_path
         }
+        # Merge settings with user-provided settings taking precedence
         merged_settings = {**default_settings, **(data.settings or {})}
 
         session = ProxySession(
@@ -87,7 +95,8 @@ async def create_session(
             project_id=data.project_id,
             created_by=data.user_id,
             settings=merged_settings or {},
-            is_active=True
+            is_active=True,
+            start_time=datetime.utcnow()
         )
         db.add(session)
         await db.commit()
@@ -106,19 +115,49 @@ async def start_proxy(
 ) -> dict:
     """Start the proxy with the specified settings."""
     try:
-        config = get_settings()
-        result = await db.execute(
-            select(ProxySession).where(ProxySession.id == session_id)
-        )
-        session = result.scalar_one_or_none()
-        if not session:
-            raise HTTPException(status_code=404, detail="Session not found")
+            config = get_settings()
+            result = await db.execute(
+                select(ProxySession).where(ProxySession.id == session_id)
+            )
+            session = result.scalar_one_or_none()
+            if not session:
+                raise HTTPException(status_code=404, detail="Session not found")
 
-        session.is_active = True
-        session.settings.update(settings)
-        await db.commit()
+            # Verify CA certificate files exist
+            if not os.path.exists(config.ca_cert_path):
+                raise HTTPException(status_code=500, detail=f"CA certificate file not found: {config.ca_cert_path}")
+            if not os.path.exists(config.ca_key_path):
+                raise HTTPException(status_code=500, detail=f"CA key file not found: {config.ca_key_path}")
 
-        return {"status": "started", "session_id": session_id}
+            # Initialize CA
+            logger.info(f"Initializing CA with cert_path={config.ca_cert_path}, key_path={config.ca_key_path}")
+            ca = CertificateAuthority(
+                ca_cert_path=Path(config.ca_cert_path),
+                ca_key_path=Path(config.ca_key_path)
+            )
+
+            # Start the proxy with the configured CA
+            from proxy.server.proxy_server import ProxyServer
+            proxy_server = ProxyServer(config=ProxyConfig(**session.settings), ca_instance=ca)
+
+            try:
+                await proxy_server.start()
+            except Exception as e:
+                logger.error(f"Failed to start proxy server: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+
+            # Update session settings and status
+            merged_settings = {
+                **settings.model_dump(),
+                "ca_cert_path": config.ca_cert_path,
+                "ca_key_path": config.ca_key_path
+            }
+            session.is_active = True
+            session.settings.update(merged_settings)
+            await db.commit()
+
+            logger.info(f"Proxy started successfully with certificate paths: {config.ca_cert_path}, {config.ca_key_path}")
+            return {"status": "started", "session_id": session_id}
     except Exception as e:
         logger.error(f"Failed to start proxy: {e}")
         raise HTTPException(status_code=500, detail=str(e))

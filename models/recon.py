@@ -1,101 +1,61 @@
-"""Recon-related models."""
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, JSON, Boolean
-from sqlalchemy.orm import relationship
+"""Recon models for the application."""
 from datetime import datetime
 
-from database import Base
-from .base import Project
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy.orm import relationship
+
+from models.base import Base
+
 
 class ReconModule(Base):
+    """Recon module model."""
+
     __tablename__ = "recon_modules"
 
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, index=True)  # Module name (e.g. amass, subfinder, etc)
-    description = Column(String, nullable=True)  # Module description
-    is_enabled = Column(Boolean, default=True)  # Whether this module is enabled
+    id = Column(Integer, primary_key=True)
     project_id = Column(Integer, ForeignKey("projects.id"))
+    name = Column(String, nullable=False)
+    description = Column(Text)
+    settings = Column(JSON, default=dict)
+    is_active = Column(String, default="true")
     created_at = Column(DateTime, default=datetime.utcnow)
-    last_run = Column(DateTime, nullable=True)  # Last time this module was run
-    run_frequency = Column(String, nullable=True)  # How often to run this module
-    config = Column(JSON, nullable=True)  # Module-specific configuration
-    
-    # Relationships
-    project = relationship("Project", back_populates="recon_modules")
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "name": self.name,
-            "description": self.description,
-            "is_enabled": self.is_enabled,
-            "project_id": self.project_id,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "last_run": self.last_run.isoformat() if self.last_run else None,
-            "run_frequency": self.run_frequency,
-            "config": self.config
-        }
+    project = relationship("Project", back_populates="recon_modules")
+    targets = relationship("ReconTarget", back_populates="module")
+    results = relationship("ReconResult", back_populates="module")
+
 
 class ReconTarget(Base):
+    """Recon target model."""
+
     __tablename__ = "recon_targets"
 
-    id = Column(Integer, primary_key=True, index=True)
-    domain = Column(String, index=True)  # Target domain/hostname
-    description = Column(String, nullable=True)  # Optional description of the target
-    is_active = Column(Boolean, default=True)  # Whether this target is currently being scanned
+    id = Column(Integer, primary_key=True)
     project_id = Column(Integer, ForeignKey("projects.id"))
+    module_id = Column(Integer, ForeignKey("recon_modules.id"))
+    target = Column(String, nullable=False)
+    result_metadata = Column(JSON, default=dict)
     created_at = Column(DateTime, default=datetime.utcnow)
-    last_scanned = Column(DateTime, nullable=True)  # Last time this target was scanned
-    scan_frequency = Column(String, nullable=True)  # How often to scan this target (e.g. "daily", "weekly")
-    target_metadata = Column(JSON, nullable=True)  # Additional target metadata
-    
-    # Relationships
-    project = relationship("Project", back_populates="recon_targets")
-    scan_results = relationship("ReconResult", back_populates="target")
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "domain": self.domain,
-            "description": self.description,
-            "is_active": self.is_active,
-            "project_id": self.project_id,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "last_scanned": self.last_scanned.isoformat() if self.last_scanned else None,
-            "scan_frequency": self.scan_frequency,
-            "target_metadata": self.target_metadata
-        }
+    project = relationship("Project", back_populates="recon_targets")
+    module = relationship("ReconModule", back_populates="targets")
+    results = relationship("ReconResult", back_populates="target")
+
 
 class ReconResult(Base):
+    """Recon result model."""
+
     __tablename__ = "recon_results"
 
-    id = Column(Integer, primary_key=True, index=True)
-    tool = Column(String, index=True)  # Name of the tool used (amass, subfinder, etc)
-    target_id = Column(Integer, ForeignKey("recon_targets.id"))
-    results = Column(JSON)  # Structured results from the tool
-    status = Column(String)  # Status of the scan (completed, failed, etc)
-    error_message = Column(String, nullable=True)  # Error message if scan failed
-    start_time = Column(DateTime, default=datetime.utcnow)
-    end_time = Column(DateTime, nullable=True)
+    id = Column(Integer, primary_key=True)
     project_id = Column(Integer, ForeignKey("projects.id"))
+    module_id = Column(Integer, ForeignKey("recon_modules.id"))
+    target_id = Column(Integer, ForeignKey("recon_targets.id"))
+    result_data = Column(JSON, default=dict)
     created_at = Column(DateTime, default=datetime.utcnow)
-    scan_type = Column(String, index=True)  # Type of scan (subdomain_scan, port_scan, etc)
-    scan_metadata = Column(JSON, nullable=True)  # Additional metadata and change tracking
-    
-    # Relationships
-    project = relationship("Project", back_populates="recon_results")
-    target = relationship("ReconTarget", back_populates="scan_results")
-    vulnerabilities = relationship("Vulnerability", back_populates="recon_result")
 
-    def to_dict(self):
-        return {
-            "id": self.id,
-            "tool": self.tool,
-            "target_id": self.target_id,
-            "results": self.results,
-            "status": self.status,
-            "error_message": self.error_message,
-            "start_time": self.start_time.isoformat() if self.start_time else None,
-            "end_time": self.end_time.isoformat() if self.end_time else None,
-            "project_id": self.project_id,
-            "scan_metadata": self.scan_metadata
-        }
+    project = relationship("Project", back_populates="recon_results")
+    module = relationship("ReconModule", back_populates="results")
+    target = relationship("ReconTarget", back_populates="results")

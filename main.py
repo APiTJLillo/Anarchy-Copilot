@@ -14,7 +14,7 @@ import typing
 
 from recon_module.recon_manager import ReconManager
 from models.recon import ReconResult
-from database import get_db
+from database import get_db, AsyncSessionLocal
 from api.proxy import router as proxy_router
 from api.websocket import router as websocket_router
 from api.projects import router as projects_router
@@ -89,11 +89,15 @@ app = create_and_configure_app()
 async def startup_event():
     """Log when application starts."""
     logger.info(f"FastAPI application starting up (v{__version__})")
-    # Test the proxy status endpoint
-    from api.proxy.endpoints import get_proxy_status
+    
+    # Test the proxy status endpoint - fixed to properly provide database session
     try:
-        status = await get_proxy_status()
-        logger.info(f"Initial proxy status: {status}")
+        # Create a database session and pass it to get_proxy_status
+        async with AsyncSessionLocal() as db:
+            from sqlalchemy.ext.asyncio import AsyncSession
+            from api.proxy.endpoints import get_proxy_status
+            status = await get_proxy_status(db=db)
+            logger.info(f"Initial proxy status: {status}")
     except Exception as e:
         logger.error(f"Error getting proxy status: {e}")
 
@@ -233,8 +237,8 @@ if __name__ == "__main__":
         app,
         host=settings.proxy_host,
         port=settings.proxy_port,
-        ssl_keyfile="app/certs/ca.key",
-        ssl_certfile="app/certs/ca.crt",
+        ssl_keyfile=settings.ca_key_path,
+        ssl_certfile=settings.ca_cert_path,
         loop="asyncio",  # Use standard asyncio loop
         log_config={
             "version": 1,

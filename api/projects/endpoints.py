@@ -1,6 +1,6 @@
 """Project management API endpoints."""
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime
 from fastapi import HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,8 +8,9 @@ from sqlalchemy.future import select
 from sqlalchemy import update, delete
 from sqlalchemy.orm import selectinload
 
-from database import get_async_session
-from models.base import Project, User
+from database.session import get_db
+from . import models
+from models.core import Project, User
 from . import router
 from .models import (
     CreateProject,
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 @router.post("", response_model=ProjectResponse)
 async def create_project(
     data: CreateProject,
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_db)
 ) -> ProjectResponse:
     """Create a new project."""
     # Verify owner exists
@@ -51,7 +52,7 @@ async def create_project(
 
 @router.get("", response_model=List[ProjectResponse])
 async def list_projects(
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_db)
 ) -> List[ProjectResponse]:
     """List all projects."""
     result = await db.execute(
@@ -64,7 +65,7 @@ async def list_projects(
 @router.get("/{project_id}", response_model=ProjectResponse)
 async def get_project(
     project_id: int,
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_db)
 ) -> ProjectResponse:
     """Get a project by ID."""
     result = await db.execute(
@@ -82,7 +83,7 @@ async def get_project(
 async def update_project(
     project_id: int,
     data: UpdateProject,
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_db)
 ) -> ProjectResponse:
     """Update a project."""
     # Get project
@@ -107,7 +108,7 @@ async def update_project(
 @router.delete("/{project_id}")
 async def delete_project(
     project_id: int,
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_db)
 ) -> Dict[str, str]:
     """Delete a project."""
     # Check project exists
@@ -130,7 +131,7 @@ async def delete_project(
 async def add_collaborator(
     project_id: int,
     data: ProjectCollaborator,
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_db)
 ) -> ProjectCollaboratorResponse:
     """Add a collaborator to a project."""
     # Get project and user
@@ -163,7 +164,7 @@ async def add_collaborator(
 async def remove_collaborator(
     project_id: int,
     user_id: int,
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_db)
 ) -> Dict[str, str]:
     """Remove a collaborator from a project."""
     # Get project
@@ -185,7 +186,7 @@ async def remove_collaborator(
 @router.get("/{project_id}/collaborators", response_model=List[ProjectCollaboratorResponse])
 async def list_collaborators(
     project_id: int,
-    db: AsyncSession = Depends(get_async_session)
+    db: AsyncSession = Depends(get_db)
 ) -> List[ProjectCollaboratorResponse]:
     """List all collaborators in a project."""
     result = await db.execute(

@@ -15,6 +15,9 @@ services:
       - type: volume
         source: dev-cache
         target: /root/.cache
+      - type: bind
+        source: ./certs
+        target: /app/certs
     ports:
       - "8000:8000" # API port
     environment:
@@ -37,6 +40,8 @@ services:
       - ANARCHY_PROXY_MAX_CONNECTIONS=100
       - ANARCHY_PROXY_MAX_KEEPALIVE_CONNECTIONS=20
       - ANARCHY_PROXY_KEEPALIVE_TIMEOUT=30
+      - CA_CERT_PATH=/app/certs/ca.crt
+      - CA_KEY_PATH=/app/certs/ca.key
     env_file:
       - .env
     entrypoint: [ "/usr/local/bin/dev-entrypoint.sh" ]
@@ -56,8 +61,12 @@ services:
     volumes:
       - .:/app
       - dev-cache:/root/.cache
-      - proxy-certs:/app/certs
-      - proxy-data:/app/data
+      - type: bind
+        source: ./certs
+        target: /app/certs
+      - type: bind
+        source: ./data
+        target: /app/data
     ports:
       - "8083:8083"
       - "5678:5678" # Debug port
@@ -65,6 +74,18 @@ services:
       - PYTHONPATH=/app
       - PYTHONUNBUFFERED=1
       - DEBUG=1
+      - CA_CERT_PATH=/app/certs/ca.crt
+      - CA_KEY_PATH=/app/certs/ca.key
+      # Database settings
+      - SQLALCHEMY_DATABASE_URL=sqlite+aiosqlite:///./data/proxy.db
+      # Proxy Settings
+      - ANARCHY_PROXY_HOST=0.0.0.0
+      - ANARCHY_PROXY_PORT=8083
+      - ANARCHY_PROXY_INTERCEPT_REQUESTS=true
+      - ANARCHY_PROXY_INTERCEPT_RESPONSES=true
+      - ANARCHY_PROXY_MAX_CONNECTIONS=100
+      - ANARCHY_PROXY_MAX_KEEPALIVE_CONNECTIONS=20
+      - ANARCHY_PROXY_KEEPALIVE_TIMEOUT=30
     healthcheck:
       test: [ "CMD", "/usr/local/bin/healthcheck.sh" ]
       interval: 10s
@@ -96,7 +117,7 @@ services:
       proxy:
         condition: service_started
     healthcheck:
-      test: [ "CMD", "wget", "--spider", "-q", "http://localhost:3000" ]
+      test: [ "CMD", "curl", "-f", "http://localhost:3000" ]
       interval: 10s
       timeout: 5s
       retries: 3
@@ -105,8 +126,6 @@ services:
 volumes:
   dev-cache:
     name: anarchy-copilot_dev-cache
-  proxy-certs:
-    name: anarchy-copilot_proxy-certs
   proxy-data:
     name: anarchy-copilot_proxy-data
   frontend-node-modules:

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Optional, Tuple, Any, Set, Dict, List
 from urllib.parse import unquote
 from uuid import uuid4
-from async_timeout import timeout as async_timeout
+from async_timeout import timeout
 
 from uvicorn.protocols.http.h11_impl import H11Protocol as BaseH11Protocol
 from sqlalchemy import text, select
@@ -284,7 +284,7 @@ class TunnelProtocol(H11Protocol):
             if self._remote_transport and self.flow_control:
                 self.flow_control.pause_reading()
                 try:
-                    async with async_timeout(1.0) as cm:
+                    async with timeout(1.0) as cm:
                         await asyncio.sleep(0.1)  # Brief pause to let buffers drain
                 finally:
                     if not self._remote_transport.is_closing():
@@ -378,7 +378,7 @@ class TunnelProtocol(H11Protocol):
             
             try:
                 # Send response with timeout protection
-                async with async_timeout(5) as cm:
+                async with timeout(5) as cm:
                     if self.transport and not self.transport.is_closing():
                         self.transport.write(response)
                         self._connect_response_sent = True  # Mark response as sent
@@ -394,7 +394,7 @@ class TunnelProtocol(H11Protocol):
                 # Create the remote connection with retries
                 for attempt in range(3):
                     try:
-                        async with async_timeout(10) as cm:
+                        async with timeout(10) as cm:
                             self._remote_transport, self._remote_protocol = await loop.create_connection(
                                 lambda: TunnelTransport(
                                     client_transport=self.transport,
@@ -756,7 +756,7 @@ class TunnelTransport(asyncio.Protocol):
     async def _handle_write(self, data: bytes) -> None:
         """Handle writing data with flow control."""
         try:
-            async with async_timeout(self._write_timeout) as cm:
+            async with timeout(self._write_timeout) as cm:
                 # Write data to client transport
                 if self.client_transport and not self.client_transport.is_closing():
                     self.client_transport.write(data)

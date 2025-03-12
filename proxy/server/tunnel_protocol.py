@@ -1,17 +1,44 @@
-"""Protocol implementation for tunneling connections."""
+"""Protocol implementation for tunneling connections with database integration."""
 import asyncio
 import logging
 import socket
-from datetime import datetime
-from typing import Optional, Dict, Any, Callable, List, Protocol, runtime_checkable, Set
-from async_timeout import timeout as async_timeout
+import ssl
+import signal
+import os
 import time
+import psutil
+import sys
 import uuid
+import uvicorn
+from contextlib import AsyncExitStack
+from pathlib import Path
+from async_timeout import timeout
+from typing import Dict, List, Optional, Any, Tuple, Callable, TYPE_CHECKING, cast, NamedTuple, Type, runtime_checkable, Set
+from typing_extensions import TypedDict, Protocol
+from urllib.parse import urlparse, unquote
+from uuid import uuid4
+from sqlalchemy import text
+from datetime import datetime
+from proxy.session import get_active_sessions
+from proxy.interceptor import InterceptedRequest, InterceptedResponse, ProxyInterceptor
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import sessionmaker
+from database import engine, AsyncSessionLocal
 
 from .flow_control import FlowControl
 from .state import proxy_state
 
 logger = logging.getLogger("proxy.core")
+
+# Add database interceptor logger
+db_logger = logging.getLogger("proxy.interceptors.database")
+db_logger.setLevel(logging.DEBUG)
+if not db_logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setLevel(logging.DEBUG)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    db_logger.addHandler(handler)
 
 @runtime_checkable
 class TransferCallback(Protocol):
@@ -25,27 +52,38 @@ class TunnelProtocol(asyncio.Protocol):
     on_data_sent: Optional[TransferCallback] = None
     on_data_received: Optional[TransferCallback] = None
     
+    # Class variable to store active connections
+    _active_connections: Dict[str, Dict[str, Any]] = {}
+    
     def __init__(self, client_transport: asyncio.Transport, flow_control: FlowControl, 
-                 connection_id: str, buffer_size: int = 262144,  # Increased buffer size
+                 connection_id: str, interceptor_class: Optional[Type[ProxyInterceptor]] = None,
+                 buffer_size: int = 262144,  # Increased buffer size
                  metrics_interval: float = 0.1,
                  write_limit: int = 1048576,  # Increased write limit
                  write_interval: float = 0.0001):  # Decreased write interval
         """Initialize tunnel protocol."""
         super().__init__()
-        self.client_transport = client_transport
-        self._transport = None  # Server transport
-        self.flow_control = flow_control
-        self._connection_id = connection_id
+        self._transport = None
+        self._client_transport = client_transport
+        self._flow_control = flow_control
+        self.connection_id = connection_id
+        self._interceptor_class = interceptor_class
+        self._interceptor = None
         self._buffer_size = buffer_size
         self._metrics_interval = metrics_interval
         self._write_limit = write_limit
         self._write_interval = write_interval
         self._write_queue = asyncio.Queue()
         self._write_task = None
-        self._closing = False
+        self._monitor_task = None
         self._bytes_sent = 0
         self._bytes_received = 0
+        self._requests_processed = 0
         self._last_activity = time.time()
+        self._tunnel_start_time = None
+        self._tunnel_end_time = None
+        self._in_tunnel_mode = False
+        self._last_request = None  # Store the last request for matching with response
         
         # Transfer settings
         self._write_limit = write_limit
@@ -71,6 +109,10 @@ class TunnelProtocol(asyncio.Protocol):
         # Rate limiting state
         self._write_permits = asyncio.Semaphore(10)  # Increased concurrent writes
         
+        # Database integration
+        self.session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        self._db: Optional[AsyncSession] = None
+        
         # Register state
         asyncio.create_task(self._update_metrics("initialized"))
         
@@ -86,22 +128,39 @@ class TunnelProtocol(asyncio.Protocol):
         self._connect_headers: Dict[str, str] = {}
         self._host: Optional[str] = None
         self._port: Optional[int] = None
-        self._in_tunnel_mode = False
         self._tunnel_buffer = bytearray()
         self._buffer = bytearray()  # Buffer for TLS handshake data
         self._connect_response_sent = False
         
         # Connection tracking initialization
         self._connection_id = str(uuid.uuid4())
-        self._requests_processed = 0
         self._events: List[Dict[str, Any]] = []
         self._event_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
         self._event_processor = None
         self._stall_timeout = 10.0  # 10 seconds stall detection
         self._monitor_task = None
 
-        logger.debug(f"[{self._connection_id}] TunnelProtocol initialized")
-    
+        # HTTP message parsing state
+        self._http_buffer = bytearray()
+        self._current_request = None
+        self._current_response = None
+        self._is_request = True  # Track if we're expecting a request or response
+
+        logger.debug(f"[{self.connection_id}] TunnelProtocol initialized")
+
+    async def _get_db(self) -> AsyncSession:
+        """Get database session, creating if needed."""
+        if self._db is None:
+            self._db = self.session_maker()
+        return self._db
+
+    async def _init_db_interceptor(self) -> None:
+        """Initialize the database interceptor if a class was provided."""
+        if self._interceptor_class:
+            db_logger.debug(f"[{self.connection_id}] Initializing database interceptor with class {self._interceptor_class.__name__}")
+            self._interceptor = self._interceptor_class(self.connection_id)
+            db_logger.debug(f"[{self.connection_id}] Database interceptor initialized successfully")
+            
     @property
     def transport(self) -> Optional[asyncio.Transport]:
         """Get the current transport."""
@@ -117,29 +176,27 @@ class TunnelProtocol(asyncio.Protocol):
         sock = transport.get_extra_info('socket')
         if sock:
             try:
-                # Set TCP_NODELAY to disable Nagle's algorithm
                 sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-                # Set receive buffer size
                 sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 256 * 1024)
-                logger.debug(f"[{self._connection_id}] Socket configured for performance")
+                logger.debug(f"[{self.connection_id}] Socket configured for performance")
             except socket.error as e:
-                logger.warning(f"[{self._connection_id}] Failed to configure socket: {e}")
+                logger.warning(f"[{self.connection_id}] Failed to configure socket: {e}")
+        
+        # Initialize database interceptor
+        asyncio.create_task(self._init_db_interceptor())
         
         # Start activity monitor
         self._monitor_task = asyncio.create_task(self._monitor_activity())
-        logger.info(f"[{self._connection_id}] New connection established")
+        logger.info(f"[{self.connection_id}] New connection established")
         
         self._write_task = asyncio.create_task(self._process_write_queue())
-        logger.debug(f"[{self._connection_id}] Tunnel transport established")
+        logger.debug(f"[{self.connection_id}] Tunnel transport established")
         
         if hasattr(transport, 'get_write_buffer_size'):
             transport.set_write_buffer_limits(high=self._buffer_size)
-        
-        # Log connection
-        logger.debug(f"[{self._connection_id}] Connection made to {transport.get_extra_info('peername')}")
-        
+            
         asyncio.create_task(self._update_metrics("connected"))
-    
+
     async def _monitor_activity(self):
         """Monitor connection for stalls."""
         while not self.transport.is_closing():
@@ -147,62 +204,195 @@ class TunnelProtocol(asyncio.Protocol):
             now = time.time()
             if now - self._last_activity > self._stall_timeout:
                 logger.warning(
-                    f"[{self._connection_id}] Connection stall detected - "
+                    f"[{self.connection_id}] Connection stall detected - "
                     f"No activity for {now - self._last_activity:.1f}s"
                 )
             if self._in_tunnel_mode:
                 logger.debug(
-                    f"[{self._connection_id}] Tunnel stats: "
+                    f"[{self.connection_id}] Tunnel stats: "
                     f"Sent={self._bytes_sent}, "
                     f"Received={self._bytes_received}, "
                     f"Buffer={len(self._tunnel_buffer)}"
                 )
 
     def data_received(self, data: bytes) -> None:
-        """Handle received data with detailed logging."""
+        """Handle received data with detailed logging and database storage."""
         size = len(data)
         self._bytes_received += size
         self._last_activity = time.time()
         
+        db_logger.debug(f"[{self.connection_id}] Received {size} bytes of data")
+
+        # Start an async task to handle the data
+        try:
+            asyncio.create_task(self._process_received_data(data, size))
+        except Exception as e:
+            logger.error(f"[{self.connection_id}] Error processing received data: {e}", exc_info=True)
+            # Ensure error is propagated to proxy core
+            asyncio.create_task(self._update_metrics("error", error=str(e)))
+
+    async def _process_received_data(self, data: bytes, size: int) -> None:
+        """Process received data through interceptors."""
         logger.debug(
-            f"[{self._connection_id}] Received {size} bytes "
+            f"[{self.connection_id}] Processing {size} bytes "
             f"(total: {self._bytes_received}, tunnel_mode: {self._in_tunnel_mode})"
         )
 
-        if self._in_tunnel_mode:
-            # Check if this looks like a TLS record
-            if data and len(data) >= 5:  # Minimum TLS record size
-                record_type = data[0]
-                version = (data[1] << 8) | data[2]
-                length = (data[3] << 8) | data[4]
-                
-                record_types = {
-                    20: "ChangeCipherSpec",
-                    21: "Alert",
-                    22: "Handshake",
-                    23: "Application"
-                }
-                
-                record_name = record_types.get(record_type, "Unknown")
-                logger.debug(
-                    f"[{self._connection_id}] TLS Record: "
-                    f"Type={record_name}({record_type}), "
-                    f"Version=0x{version:04x}, "
-                    f"Length={length}"
-                )
+        try:
+            # Process data through interceptors if available
+            if self._interceptor:
+                try:
+                    # Add data to HTTP buffer
+                    self._http_buffer.extend(data)
+                    
+                    # Try to extract complete HTTP messages
+                    while len(self._http_buffer) > 0:
+                        # For HTTP/2, check for complete frames
+                        if self._http_buffer.startswith(b'PRI * HTTP/2.0\r\n'):
+                            logger.debug(f"[{self.connection_id}] Detected HTTP/2 connection preface")
+                            # Store HTTP/2 data for now - we'll need to implement proper HTTP/2 parsing
+                            await self._interceptor.store_raw_data("http2", self._http_buffer)
+                            self._http_buffer.clear()
+                            break
+
+                        # For HTTP/1.x, look for message boundary
+                        if b'\r\n\r\n' not in self._http_buffer:
+                            # Don't break immediately - check if we have a partial HTTP message
+                            first_line = self._http_buffer.split(b'\r\n', 1)[0] if b'\r\n' in self._http_buffer else None
+                            if not first_line or (
+                                not any(first_line.startswith(method) for method in [b'GET ', b'POST ', b'PUT ', b'DELETE ', b'HEAD ', b'OPTIONS ', b'PATCH ', b'CONNECT ']) and
+                                not first_line.startswith(b'HTTP/')
+                            ):
+                                # Not an HTTP message, store as raw data
+                                await self._interceptor.store_raw_data("raw", self._http_buffer)
+                                self._http_buffer.clear()
+                            break  # Wait for more data
+                            
+                        # Split headers and potential body
+                        header_block, rest = self._http_buffer.split(b'\r\n\r\n', 1)
+                        header_lines = header_block.split(b'\r\n')
+                        
+                        if not header_lines:
+                            # Invalid HTTP message
+                            await self._interceptor.store_raw_data("raw", self._http_buffer)
+                            self._http_buffer.clear()
+                            break
+                            
+                        first_line = header_lines[0].decode('utf-8', errors='ignore')
+                        
+                        # Parse headers
+                        headers = {}
+                        content_length = 0
+                        for line in header_lines[1:]:
+                            try:
+                                line = line.decode('utf-8', errors='ignore')
+                                if ': ' in line:
+                                    name, value = line.split(': ', 1)
+                                    headers[name] = value
+                                    if name.lower() == 'content-length':
+                                        content_length = int(value)
+                            except Exception as e:
+                                logger.debug(f"[{self.connection_id}] Error parsing header line: {e}")
+                                continue
+
+                        # Check if we have the complete message
+                        if len(rest) < content_length:
+                            # Wait for more data
+                            break
+
+                        # Check if this is a request or response
+                        if first_line.startswith(('GET', 'POST', 'PUT', 'DELETE', 'HEAD', 'OPTIONS', 'PATCH', 'CONNECT')):
+                            # Parse request
+                            try:
+                                method, target, *_ = first_line.split(' ')
+                                
+                                body = rest[:content_length] if content_length > 0 else None
+                                
+                                # Create request object
+                                intercepted_request = InterceptedRequest(
+                                    method=method,
+                                    url=target,
+                                    headers=headers,
+                                    body=body,
+                                    connection_id=self.connection_id
+                                )
+                                
+                                logger.debug(f"[{self.connection_id}] Intercepting request: {method} {target}")
+                                await self._interceptor.intercept(intercepted_request)
+                                logger.info(f"[{self.connection_id}] Successfully intercepted HTTP request: {method} {target}")
+                                
+                                # Store for matching with response
+                                self._last_request = intercepted_request
+                                self._is_request = False  # Next message should be a response
+                                
+                                # Update buffer
+                                self._http_buffer = bytearray(rest[content_length:])
+                                
+                            except Exception as e:
+                                logger.error(f"[{self.connection_id}] Error processing request: {e}")
+                                await self._interceptor.store_raw_data("raw", self._http_buffer)
+                                self._http_buffer.clear()
+                                
+                        elif first_line.startswith('HTTP/'):
+                            # Parse response
+                            try:
+                                version, status_code, *reason = first_line.split(' ')
+                                status_code = int(status_code)
+                                
+                                body = rest[:content_length] if content_length > 0 else None
+                                
+                                # Create response object
+                                intercepted_response = InterceptedResponse(
+                                    status_code=status_code,
+                                    headers=headers,
+                                    body=body,
+                                    connection_id=self.connection_id
+                                )
+                                
+                                # Get the last request if available
+                                last_request = self._last_request
+                                
+                                logger.debug(f"[{self.connection_id}] Intercepting response: {status_code}")
+                                await self._interceptor.intercept(intercepted_response, last_request)
+                                logger.info(f"[{self.connection_id}] Successfully intercepted HTTP response: {status_code}")
+                                
+                                self._is_request = True  # Next message should be a request
+                                
+                                # Update buffer
+                                self._http_buffer = bytearray(rest[content_length:])
+                                
+                            except Exception as e:
+                                logger.error(f"[{self.connection_id}] Error processing response: {e}")
+                                await self._interceptor.store_raw_data("raw", self._http_buffer)
+                                self._http_buffer.clear()
+                        else:
+                            # Not an HTTP message, store as raw data
+                            await self._interceptor.store_raw_data("raw", self._http_buffer)
+                            self._http_buffer.clear()
+                except Exception as e:
+                    logger.error(f"[{self.connection_id}] Error processing data: {str(e)}", exc_info=True)
+                    # Clear buffer on error
+                    await self._interceptor.store_raw_data("raw", self._http_buffer)
+                    self._http_buffer.clear()
 
             # Forward data to tunnel
-            if self._remote_transport and not self._remote_transport.is_closing():
+            if self._in_tunnel_mode and self._remote_transport and not self._remote_transport.is_closing():
                 try:
                     self._remote_transport.write(data)
-                    logger.debug(f"[{self._connection_id}] Forwarded {size} bytes to tunnel")
                 except Exception as e:
-                    logger.error(f"[{self._connection_id}] Failed to forward data: {e}")
+                    logger.error(f"[{self.connection_id}] Error forwarding data: {e}", exc_info=True)
             else:
-                logger.warning(f"[{self._connection_id}] No remote transport available")
-        else:
-            logger.debug(f"[{self._connection_id}] Buffering {size} bytes (not in tunnel mode)")
-            self._buffer.extend(data)
+                logger.debug(f"[{self.connection_id}] Buffering {size} bytes (not in tunnel mode)")
+                self._buffer.extend(data)
+
+        except Exception as e:
+            logger.error(f"[{self.connection_id}] Error in _process_received_data: {str(e)}", exc_info=True)
+            # Ensure data is still forwarded even if processing fails
+            if self._in_tunnel_mode and self._remote_transport and not self._remote_transport.is_closing():
+                try:
+                    self._remote_transport.write(data)
+                except Exception as forward_error:
+                    logger.error(f"[{self.connection_id}] Error forwarding data after processing error: {forward_error}")
 
     def connection_lost(self, exc: Optional[Exception]) -> None:
         """Handle connection loss with cleanup."""
@@ -211,12 +401,12 @@ class TunnelProtocol(asyncio.Protocol):
             duration = (datetime.now() - self._tunnel_start_time).total_seconds()
         
         if exc:
-            logger.error(f"[{self._connection_id}] Connection lost with error: {exc}")
+            logger.error(f"[{self.connection_id}] Connection lost with error: {exc}")
         else:
-            logger.info(f"[{self._connection_id}] Connection closed normally")
+            logger.info(f"[{self.connection_id}] Connection closed normally")
             
         logger.info(
-            f"[{self._connection_id}] Connection statistics:\n"
+            f"[{self.connection_id}] Connection statistics:\n"
             f"  Duration: {duration:.1f}s\n"
             f"  Bytes sent: {self._bytes_sent}\n"
             f"  Bytes received: {self._bytes_received}\n"
@@ -232,6 +422,12 @@ class TunnelProtocol(asyncio.Protocol):
         
         if self._remote_transport:
             self._remote_transport.close()
+
+        # Close database connections
+        if self._db:
+            asyncio.create_task(self._db.close())
+        if self._interceptor:
+            asyncio.create_task(self._interceptor.close())
             
         super().connection_lost(exc)
     
@@ -247,7 +443,7 @@ class TunnelProtocol(asyncio.Protocol):
                     
                     # Try to get multiple chunks if available
                     try:
-                        async with async_timeout(0.1):  # Reduced timeout for responsiveness
+                        async with timeout(0.1):  # Reduced timeout for responsiveness
                             while not self._closing and total_size < self._write_limit:
                                 try:
                                     data = self._write_queue.get_nowait()
@@ -264,22 +460,22 @@ class TunnelProtocol(asyncio.Protocol):
                     if chunks:
                         # Write chunks with timeout protection
                         try:
-                            async with async_timeout(5.0):  # Increased timeout for writes
+                            async with timeout(5.0):  # Increased timeout for writes
                                 await self._write_chunks(chunks, total_size)
                                 
                                 # Reset error counter on successful write
                                 if consecutive_errors > 0:
                                     consecutive_errors = 0
-                                    logger.debug(f"[{self._connection_id}] Recovered from write errors")
+                                    logger.debug(f"[{self.connection_id}] Recovered from write errors")
                                 
                                 # Resume reading if queue has space
                                 if (self._write_queue.qsize() < self._write_queue.maxsize / 2 and 
                                     hasattr(self.transport, "resume_reading")):
                                     self.transport.resume_reading()
-                                    logger.debug(f"[{self._connection_id}] Resumed reading")
+                                    logger.debug(f"[{self.connection_id}] Resumed reading")
                                     
                         except asyncio.TimeoutError:
-                            logger.error(f"[{self._connection_id}] Write operation timed out")
+                            logger.error(f"[{self.connection_id}] Write operation timed out")
                             consecutive_errors += 1
                             
                             # Put chunks back in queue if possible
@@ -287,7 +483,7 @@ class TunnelProtocol(asyncio.Protocol):
                                 try:
                                     self._write_queue.put_nowait(chunk)
                                 except asyncio.QueueFull:
-                                    logger.error(f"[{self._connection_id}] Write queue full, dropping chunk")
+                                    logger.error(f"[{self.connection_id}] Write queue full, dropping chunk")
                             
                             if consecutive_errors > 5:
                                 raise RuntimeError("Too many consecutive write timeouts")
@@ -302,7 +498,7 @@ class TunnelProtocol(asyncio.Protocol):
                 except asyncio.CancelledError:
                     break
                 except Exception as e:
-                    logger.error(f"[{self._connection_id}] Write queue error: {e}")
+                    logger.error(f"[{self.connection_id}] Write queue error: {e}")
                     consecutive_errors += 1
                     if consecutive_errors > 5:
                         break
@@ -310,7 +506,7 @@ class TunnelProtocol(asyncio.Protocol):
                     continue
                     
         except Exception as e:
-            logger.error(f"[{self._connection_id}] Write queue processor failed: {e}")
+            logger.error(f"[{self.connection_id}] Write queue processor failed: {e}")
         finally:
             # Ensure reading is resumed
             if hasattr(self.transport, "resume_reading"):
@@ -340,10 +536,10 @@ class TunnelProtocol(asyncio.Protocol):
                 # Small yield to prevent blocking
                 await asyncio.sleep(0)
             
-            logger.debug(f"[{self._connection_id}] Wrote {total_size} bytes in {len(chunks)} chunks")
+            logger.debug(f"[{self.connection_id}] Wrote {total_size} bytes in {len(chunks)} chunks")
             
         except Exception as e:
-            logger.error(f"[{self._connection_id}] Error writing chunks: {e}")
+            logger.error(f"[{self.connection_id}] Error writing chunks: {e}")
             raise
 
     def _get_target_transport(self) -> Optional[asyncio.Transport]:
@@ -364,7 +560,7 @@ class TunnelProtocol(asyncio.Protocol):
             return True
             
         except Exception as e:
-            logger.error(f"[{self._connection_id}] Error handling EOF: {e}")
+            logger.error(f"[{self.connection_id}] Error handling EOF: {e}")
             asyncio.create_task(self._cleanup(error=str(e)))
             return False
 
@@ -409,7 +605,7 @@ class TunnelProtocol(asyncio.Protocol):
             }
             
             await proxy_state.update_connection(
-                self._connection_id,
+                self.connection_id,
                 "tunnel_metrics",
                 metrics
             )
@@ -417,12 +613,12 @@ class TunnelProtocol(asyncio.Protocol):
             self._last_metrics_update = now
             
         except Exception as e:
-            logger.error(f"[{self._connection_id}] Failed to update metrics: {e}")
+            logger.error(f"[{self.connection_id}] Failed to update metrics: {e}")
     
     async def _handle_connect(self, host: str, port: int) -> None:
         """Handle CONNECT by establishing direct tunnel."""
         try:
-            logger.debug(f"[{self._connection_id}] Establishing direct tunnel to {host}:{port}")
+            logger.debug(f"[{self.connection_id}] Establishing direct tunnel to {host}:{port}")
             
             # Send 200 Connection Established
             response = b"HTTP/1.1 200 Connection Established\r\nConnection: keep-alive\r\n\r\n"
@@ -436,7 +632,7 @@ class TunnelProtocol(asyncio.Protocol):
             server_protocol = TunnelProtocol(
                 client_transport=original_transport,
                 flow_control=self.flow_control,
-                connection_id=f"{self._connection_id}-server",
+                connection_id=f"{self.connection_id}-server",
                 buffer_size=self._buffer_size,
                 metrics_interval=self._metrics_interval,
                 write_limit=self._write_limit,
@@ -446,14 +642,14 @@ class TunnelProtocol(asyncio.Protocol):
             # Create direct connection to target with timeout
             loop = asyncio.get_event_loop()
             try:
-                async with async_timeout(10) as cm:  # 10 second timeout for connection
-                    logger.debug(f"[{self._connection_id}] Connecting to {host}:{port}")
+                async with timeout(10) as cm:  # 10 second timeout for connection
+                    logger.debug(f"[{self.connection_id}] Connecting to {host}:{port}")
                     server_transport, _ = await loop.create_connection(
                         lambda: server_protocol,
                         host=host,
                         port=port
                     )
-                    logger.debug(f"[{self._connection_id}] Connected to {host}:{port}")
+                    logger.debug(f"[{self.connection_id}] Connected to {host}:{port}")
             except asyncio.TimeoutError:
                 raise RuntimeError(f"Connection to {host}:{port} timed out")
             
@@ -493,10 +689,10 @@ class TunnelProtocol(asyncio.Protocol):
                     # Verify socket settings
                     actual_rcvbuf = sock.getsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF)
                     actual_sndbuf = sock.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF)
-                    logger.debug(f"[{self._connection_id}] Socket buffers: rcv={actual_rcvbuf}, snd={actual_sndbuf}")
+                    logger.debug(f"[{self.connection_id}] Socket buffers: rcv={actual_rcvbuf}, snd={actual_sndbuf}")
                     
                 except socket.error as e:
-                    logger.warning(f"[{self._connection_id}] Socket configuration error: {e}")
+                    logger.warning(f"[{self.connection_id}] Socket configuration error: {e}")
             
             # Update state and log
             await self._update_metrics("tunnel_established", 
@@ -504,10 +700,10 @@ class TunnelProtocol(asyncio.Protocol):
                                      remote_port=port,
                                      client_id=id(self.client_transport),
                                      server_id=id(self._server_transport))
-            logger.debug(f"[{self._connection_id}] Tunnel established to {host}:{port}")
+            logger.debug(f"[{self.connection_id}] Tunnel established to {host}:{port}")
             
         except Exception as e:
-            logger.error(f"[{self._connection_id}] Failed to establish tunnel: {e}")
+            logger.error(f"[{self.connection_id}] Failed to establish tunnel: {e}")
             await self._update_metrics("error", error=str(e))
             asyncio.create_task(self._cleanup(error=str(e)))
             raise
@@ -518,7 +714,7 @@ class TunnelProtocol(asyncio.Protocol):
             self._closing = True
             self.transport.pause_reading()
             self.flow_control.pause_reading()
-            logger.debug(f"[{self._connection_id}] Paused reading from tunnel")
+            logger.debug(f"[{self.connection_id}] Paused reading from tunnel")
             asyncio.create_task(self._update_metrics("paused"))
     
     def _resume_reading(self) -> None:
@@ -527,7 +723,7 @@ class TunnelProtocol(asyncio.Protocol):
             self._closing = False
             self.transport.resume_reading()
             self.flow_control.resume_reading()
-            logger.debug(f"[{self._connection_id}] Resumed reading from tunnel")
+            logger.debug(f"[{self.connection_id}] Resumed reading from tunnel")
             asyncio.create_task(self._update_metrics("resumed"))
     
     async def _cleanup(self, error: Optional[str] = None) -> None:
@@ -557,7 +753,7 @@ class TunnelProtocol(asyncio.Protocol):
                                 pass
                         transport.close()
                 except Exception as e:
-                    logger.warning(f"[{self._connection_id}] Error closing transport: {e}")
+                    logger.warning(f"[{self.connection_id}] Error closing transport: {e}")
             
             # Clear transport references
             self.transport = None
@@ -619,7 +815,7 @@ class TunnelProtocol(asyncio.Protocol):
             }
             
             await proxy_state.update_connection(
-                self._connection_id,
+                self.connection_id,
                 "tunnel_metrics",
                 metrics
             )
@@ -627,4 +823,4 @@ class TunnelProtocol(asyncio.Protocol):
             self._last_metrics_update = now
             
         except Exception as e:
-            logger.error(f"[{self._connection_id}] Failed to update metrics: {e}")
+            logger.error(f"[{self.connection_id}] Failed to update metrics: {e}")

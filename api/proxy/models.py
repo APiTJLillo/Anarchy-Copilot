@@ -123,7 +123,7 @@ class CreateProxySession(BaseModel):
 class ProxySession(ProxySessionBase):
     """Model for a complete proxy session."""
     id: int
-    start_time: datetime
+    start_time: Optional[datetime] = None
     end_time: Optional[datetime] = None
     is_active: bool
     project_id: Optional[int]

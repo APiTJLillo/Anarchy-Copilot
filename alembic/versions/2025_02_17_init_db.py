@@ -9,6 +9,7 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import sqlite
+from sqlalchemy.sql import func
 
 # revision identifiers, used by Alembic.
 revision: str = '2025_02_17_init'
@@ -118,6 +119,32 @@ def upgrade() -> None:
     with op.batch_alter_table('recon_results', schema=None) as batch_op:
         batch_op.create_foreign_key('fk_recon_results_target_id', 'recon_targets', ['target_id'], ['id'])
     
+    # Create vulnerabilities table (missing table - adding it before it's referenced)
+    op.create_table(
+        'vulnerabilities',
+        sa.Column('id', sa.Integer(), nullable=False),
+        sa.Column('title', sa.String(), nullable=True),
+        sa.Column('description', sa.Text(), nullable=True),
+        sa.Column('severity', sa.Enum('CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO', name='severitylevel'), nullable=True),
+        sa.Column('status', sa.Enum('OPEN', 'IN_PROGRESS', 'VERIFIED', 'FIXED', 'WONT_FIX', 'FALSE_POSITIVE', name='vulnerabilitystatus'), 
+                  nullable=True, server_default='OPEN'),
+        sa.Column('cvss_score', sa.Float(), nullable=True),
+        sa.Column('proof_of_concept', sa.Text(), nullable=True),
+        sa.Column('steps_to_reproduce', sa.Text(), nullable=True),
+        sa.Column('technical_details', sa.Text(), nullable=True),
+        sa.Column('recommendation', sa.Text(), nullable=True),
+        sa.Column('discovered_at', sa.DateTime(), server_default=sa.text('CURRENT_TIMESTAMP')),
+        sa.Column('updated_at', sa.DateTime(), server_default=sa.text('CURRENT_TIMESTAMP')),
+        sa.Column('project_id', sa.Integer(), nullable=True),
+        sa.Column('assigned_user_id', sa.Integer(), nullable=True),
+        sa.Column('recon_result_id', sa.Integer(), nullable=True),
+        sa.ForeignKeyConstraint(['assigned_user_id'], ['users.id'], ),
+        sa.ForeignKeyConstraint(['project_id'], ['projects.id'], ),
+        sa.ForeignKeyConstraint(['recon_result_id'], ['recon_results.id'], ),
+        sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index('ix_vulnerabilities_title', 'vulnerabilities', ['title'], unique=False)
+    
     # Create vulnerability_scans table
     op.create_table(
         'vulnerability_scans',
@@ -168,14 +195,16 @@ def upgrade() -> None:
     op.create_table(
         'proxy_sessions',
         sa.Column('id', sa.Integer(), nullable=False),
-        sa.Column('name', sa.String(), nullable=True),
+        sa.Column('name', sa.String(), nullable=False),
         sa.Column('description', sa.Text(), nullable=True),
-        sa.Column('start_time', sa.DateTime(), nullable=True),
-        sa.Column('end_time', sa.DateTime(), nullable=True),
-        sa.Column('is_active', sa.Boolean(), nullable=True),
-        sa.Column('project_id', sa.Integer(), nullable=True),
-        sa.Column('created_by', sa.Integer(), nullable=True),
+        sa.Column('start_time', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('end_time', sa.DateTime(timezone=True), nullable=True),
+        sa.Column('is_active', sa.Boolean(), default=True),
+        sa.Column('project_id', sa.Integer(), nullable=False),
+        sa.Column('created_by', sa.Integer(), nullable=False),
         sa.Column('settings', sqlite.JSON(), nullable=True),
+        sa.Column('created_at', sa.DateTime(timezone=True), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
+        sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
         sa.ForeignKeyConstraint(['created_by'], ['users.id'], ),
         sa.ForeignKeyConstraint(['project_id'], ['projects.id'], ),
         sa.PrimaryKeyConstraint('id')
@@ -206,18 +235,20 @@ def upgrade() -> None:
         'proxy_history',
         sa.Column('id', sa.Integer(), nullable=False),
         sa.Column('timestamp', sa.DateTime(), nullable=True),
+        sa.Column('session_id', sa.Integer(), nullable=True),
         sa.Column('method', sa.String(), nullable=True),
         sa.Column('url', sa.String(), nullable=True),
+        sa.Column('host', sa.String(), nullable=True),
+        sa.Column('path', sa.String(), nullable=True),
         sa.Column('request_headers', sqlite.JSON(), nullable=True),
         sa.Column('request_body', sa.Text(), nullable=True),
-        sa.Column('response_status', sa.Integer(), nullable=True),
+        sa.Column('status_code', sa.Integer(), nullable=True),
         sa.Column('response_headers', sqlite.JSON(), nullable=True),
         sa.Column('response_body', sa.Text(), nullable=True),
         sa.Column('duration', sa.Float(), nullable=True),  # Request duration in seconds
         sa.Column('tags', sqlite.JSON(), nullable=True),  # List of tags
         sa.Column('notes', sa.Text(), nullable=True),
         sa.Column('is_intercepted', sa.Boolean(), nullable=True),
-        sa.Column('session_id', sa.Integer(), nullable=True),
         sa.Column('applied_rules', sqlite.JSON(), nullable=True),  # List of {rule_id, action, modifications}
         sa.Column('tls_version', sa.String(), nullable=True),  # TLS version (e.g., "TLSv1.3")
         sa.Column('cipher_suite', sa.String(), nullable=True),  # Cipher suite used
@@ -226,6 +257,24 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint('id')
     )
     op.create_index('ix_proxy_history_id', 'proxy_history', ['id'], unique=False)
+
+    # Create tunnel_metrics table
+    op.create_table(
+        'tunnel_metrics',
+        sa.Column('id', sa.Integer(), nullable=False),
+        sa.Column('timestamp', sa.DateTime(), default=sa.text('CURRENT_TIMESTAMP')),
+        sa.Column('connection_id', sa.String(), nullable=True),  # UUID of the connection
+        sa.Column('direction', sa.String(), nullable=True),  # "request" or "response"
+        sa.Column('bytes_transferred', sa.Integer(), nullable=True),  # Number of bytes in this chunk
+        sa.Column('cumulative_bytes', sa.Integer(), nullable=True),  # Running total for this connection direction
+        sa.Column('host', sa.String(), nullable=True),  # Target hostname
+        sa.Column('port', sa.Integer(), nullable=True),  # Target port
+        sa.Column('chunk_number', sa.Integer(), nullable=True),  # Sequential chunk number
+        sa.Column('session_id', sa.Integer(), nullable=True),
+        sa.ForeignKeyConstraint(['session_id'], ['proxy_sessions.id'], ),
+        sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index('ix_tunnel_metrics_connection_id', 'tunnel_metrics', ['connection_id'], unique=False)
 
     # Create proxy_analysis_results table
     op.create_table(
@@ -247,11 +296,13 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table('proxy_analysis_results')
+    op.drop_table('tunnel_metrics')
     op.drop_table('proxy_history')
     op.drop_table('interception_rules')
     op.drop_table('proxy_sessions')
     op.drop_table('vulnerability_results')
     op.drop_table('vulnerability_scans')
+    op.drop_table('vulnerabilities')  # Added this line to drop vulnerabilities table
     op.drop_table('recon_results')
     op.drop_table('recon_targets')
     op.drop_table('recon_modules')

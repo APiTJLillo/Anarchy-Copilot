@@ -189,10 +189,6 @@ start_services() {
     python -m proxy.server &
     PROXY_PID=$!
 
-    # Run the test script in the background after a short delay
-    (sleep 5 && /usr/local/bin/test-proxy.sh) &
-    TEST_PID=$!
-
     # Wait for the proxy process
     wait $PROXY_PID
 

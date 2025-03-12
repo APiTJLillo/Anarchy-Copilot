@@ -32,6 +32,3 @@ import logging
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 logger.info("Proxy package initialized successfully")
-
-# Start certificate manager
-cert_manager.start()

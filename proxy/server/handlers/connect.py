@@ -19,7 +19,7 @@ from ..protocol.base_types import TlsCapableProtocol, TlsContextProvider, TlsHan
 from ..protocol.tls_factory import create_tls_handler, TlsHandlerConfig
 from ..protocol.state_manager import StateManager
 from ..tls.context_wrapper import get_server_context, get_client_context
-from async_timeout import timeout as async_timeout
+from async_timeout import timeout
 
 logger = logging.getLogger("proxy.core")
 
@@ -79,7 +79,7 @@ class ConnectHandler:
                     # Add timeout to connection attempt using async_timeout
                     try:
                         logger.debug(f"[{self._connection_id}] Starting connection attempt with 5s timeout")
-                        async with async_timeout(5.0):  # 5 second timeout per attempt
+                        async with timeout(5.0):  # 5 second timeout per attempt
                             logger.debug(f"[{self._connection_id}] Creating connection to {ip_address}:{port}")
                             transport, _ = await loop.create_connection(
                                 lambda: protocol,
@@ -241,7 +241,7 @@ class ConnectHandler:
         # Set up client-side TLS first
         logger.debug(f"[{self._connection_id}] Setting up client-side TLS")
         try:
-            async with async_timeout(10.0):
+            async with timeout(10.0):
                 # Log initial state
                 logger.debug(f"[{self._connection_id}] Initial transport state - Protocol: {type(protocol)}, Has transport: {hasattr(protocol, 'transport')}")
                 
@@ -305,7 +305,7 @@ class ConnectHandler:
         # Set up server-side TLS
         logger.debug(f"[{self._connection_id}] Setting up server-side TLS")
         try:
-            async with async_timeout(10.0):
+            async with timeout(10.0):
                 # Verify tunnel protocol transport
                 if not tunnel_protocol.transport or tunnel_protocol.transport.is_closing():
                     raise RuntimeError("Server transport is not valid or is closing")

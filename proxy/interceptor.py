@@ -11,6 +11,16 @@ from http import HTTPStatus
 from uuid import uuid4
 import json
 import urllib.parse
+import logging
+from datetime import datetime
+from sqlalchemy import select, desc
+
+# Configure logger
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
+from starlette.requests import Request
+from starlette.responses import Response
+from database import AsyncSessionLocal
 
 @dataclass
 class InterceptedRequest:
@@ -20,6 +30,9 @@ class InterceptedRequest:
     headers: Dict[str, str]
     body: Optional[bytes] = None
     id: str = field(default_factory=lambda: str(uuid4()))
+    connection_id: Optional[str] = None
+    created_at: datetime = field(default_factory=datetime.utcnow)
+    timestamp: Optional[datetime] = None
     
     @property
     def parsed_url(self) -> urllib.parse.ParseResult:
@@ -54,6 +67,9 @@ class InterceptedResponse:
     status_code: int
     headers: Dict[str, str]
     body: Optional[bytes] = None
+    id: str = field(default_factory=lambda: str(uuid4()))
+    connection_id: Optional[str] = None
+    created_at: datetime = field(default_factory=datetime.utcnow)
     
     @property
     def status(self) -> HTTPStatus:

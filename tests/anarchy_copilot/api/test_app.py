@@ -59,7 +59,7 @@ async def test_proxy_endpoints(async_client):
 @pytest.mark.asyncio
 async def test_shutdown_handler(app):
     """Test that the shutdown handler properly cleans up resources."""
-    with patch("api.proxy.proxy_server") as mock_proxy:
+    with patch("api.proxy.server.proxy_server") as mock_proxy:
         # Configure mock proxy
         mock_proxy.stop = AsyncMock()
         mock_proxy.is_running = True
@@ -147,7 +147,7 @@ async def test_error_handling(async_client):
 @pytest.mark.asyncio
 async def test_async_error_handling(async_client):
     """Test async error handling."""
-    with patch('api.proxy.proxy_server') as mock_server:
+    with patch('api.proxy.server.proxy_server') as mock_server:
         mock_server.stop = AsyncMock(side_effect=RuntimeError("Test async error"))
         mock_server.is_running = True
         

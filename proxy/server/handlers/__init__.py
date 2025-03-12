@@ -2,7 +2,7 @@
 from .errors import ProxyError
 from .middleware import ProxyResponse, proxy_middleware
 from .http import HttpRequestHandler
-from .tunnel_protocol import TunnelProtocol
+from ..tunnel_protocol import TunnelProtocol
 
 __all__ = [
     'ProxyError',

@@ -1,12 +1,15 @@
 """WebSocket endpoints for proxy connection monitoring."""
 from typing import List
-from fastapi import WebSocket, WebSocketDisconnect
+from fastapi import WebSocket, WebSocketDisconnect, APIRouter
 from .models import ConnectionInfo
 import asyncio
 import logging
 from proxy.server.state import proxy_state, ConnectionEventBroadcaster
 
 logger = logging.getLogger("proxy.core")
+
+# Create router
+router = APIRouter()
 
 class ConnectionManager(ConnectionEventBroadcaster):
     def __init__(self):
@@ -143,3 +146,9 @@ async def handle_proxy_connection_updates(websocket: WebSocket):
                 await websocket.close()
         except:
             pass
+
+# Add the WebSocket endpoint to the router
+@router.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for real-time connection updates."""
+    await handle_proxy_connection_updates(websocket)

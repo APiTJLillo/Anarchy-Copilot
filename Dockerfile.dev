@@ -62,11 +62,13 @@ RUN pip check
 # Create necessary directories
 RUN mkdir -p /app/logs /app/data
 
-# Copy entrypoint script
-COPY scripts/dev-entrypoint.sh /usr/local/bin/
+# Copy entrypoint scripts
+COPY scripts/api-entrypoint.sh /usr/local/bin/api-entrypoint.sh
+COPY scripts/proxy-entrypoint.sh /usr/local/bin/proxy-entrypoint.sh
+RUN chmod +x /usr/local/bin/api-entrypoint.sh /usr/local/bin/proxy-entrypoint.sh
 
-# Make entrypoint executable
-RUN chmod +x /usr/local/bin/dev-entrypoint.sh
+# Set working directory
+WORKDIR /app
 
-# Set entrypoint
-ENTRYPOINT ["/usr/local/bin/dev-entrypoint.sh"]
+# Default command
+CMD ["start"]

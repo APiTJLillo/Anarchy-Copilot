@@ -16,7 +16,7 @@ from recon_module.recon_manager import ReconManager
 from models.recon import ReconResult
 from database import get_db, AsyncSessionLocal
 from api.proxy import router as proxy_router
-from api.websocket import router as websocket_router
+from api.proxy.websocket import router as websocket_router
 from api.projects import router as projects_router
 from api.users import router as users_router
 from api import create_app
@@ -49,17 +49,53 @@ def create_and_configure_app():
         "version": __version__
     }
 
-    # Don't pass cors_origins directly - it will be handled by Settings class
-    app = create_app(config)
+    # Create base app
+    app = FastAPI(**config)
+
+    # Configure CORS middleware first
+    logger.info(f"Configuring CORS with origins: {settings.cors_origins}")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["*"],
+        max_age=600,
+    )
 
     logger.info("Base app created")
+
+    # Debug log proxy router routes
+    logger.debug("Proxy router routes:")
+    for route in proxy_router.routes:
+        if hasattr(route, 'methods'):
+            logger.debug(f"  {route.path} [{route.methods}]")
+        else:
+            logger.debug(f"  {route.path} [WebSocket]")
+
+    # Debug log websocket router routes
+    logger.debug("WebSocket router routes:")
+    for route in websocket_router.routes:
+        if hasattr(route, 'methods'):
+            logger.debug(f"  {route.path} [{route.methods}]")
+        else:
+            logger.debug(f"  {route.path} [WebSocket]")
 
     # Add routers
     logger.info("Adding routers")
     app.include_router(projects_router)  # Projects router already has /api/projects prefix
-    app.include_router(proxy_router, prefix="/api/proxy")
-    app.include_router(websocket_router, prefix="/api/proxy/websocket")
+    app.include_router(proxy_router, prefix="/api/proxy")  # Mount proxy router at /api/proxy
+    app.include_router(websocket_router, prefix="/api/proxy")  # Mount WebSocket router at /api/proxy
     app.include_router(users_router, prefix="/api/users")  # Mounts at /api/users
+
+    # Debug log all registered routes
+    logger.debug("All registered routes:")
+    for route in app.routes:
+        if hasattr(route, 'methods'):
+            logger.debug(f"  {route.path} [{route.methods}]")
+        else:
+            logger.debug(f"  {route.path} [WebSocket]")
 
     # Add diagnostic routes
     @app.get("/api/health")
@@ -70,12 +106,33 @@ def create_and_configure_app():
             "version": __version__
         }
     
+    @app.get("/api/version")
+    async def get_version():
+        """Get API version."""
+        return {
+            "version": __version__
+        }
+    
     @app.get("/api/debug/routes")
     async def list_routes():
         """List all registered routes."""
+        routes = []
+        for route in app.routes:
+            if hasattr(route, "methods"):
+                routes.append({
+                    "path": route.path,
+                    "methods": list(route.methods),
+                    "name": route.name
+                })
+            else:
+                routes.append({
+                    "path": route.path,
+                    "type": "WebSocket",
+                    "name": route.name
+                })
         return {
-            "routes": [str(route) for route in app.routes],
-            "count": len(app.routes)
+            "routes": routes,
+            "count": len(routes)
         }
 
     logger.info("Application configured successfully")

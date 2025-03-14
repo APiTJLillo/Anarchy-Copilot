@@ -182,18 +182,7 @@ start_services() {
         --reload \
         --log-level debug \
         --proxy-headers \
-        --timeout-keep-alive 75 &
-    API_PID=$!
-
-    # Start the proxy in the background
-    python -m proxy.server &
-    PROXY_PID=$!
-
-    # Wait for the proxy process
-    wait $PROXY_PID
-
-    # Wait for the API process
-    wait $API_PID
+        --timeout-keep-alive 75
 }
 
 # Cleanup function

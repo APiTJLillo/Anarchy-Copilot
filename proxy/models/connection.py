@@ -134,10 +134,9 @@ class ProxyConnection:
         try:
             if self._db_interceptor is None:
                 logger.info(f"[{self.connection_id}] Setting up database interceptor")
-                self._db_interceptor = DatabaseInterceptor()
-                self._db_interceptor.set_connection_id(self.connection_id)
+                self._db_interceptor = DatabaseInterceptor(self.connection_id)
                 # Do an initial active session check to validate database connectivity
-                session_id = await self._db_interceptor._get_active_session_id()
+                session_id = await self._db_interceptor._get_session_id()
                 if session_id:
                     logger.info(f"[{self.connection_id}] Connected to active session {session_id}")
                 else:

@@ -9,7 +9,9 @@ from fastapi import APIRouter
 logger = logging.getLogger(__name__)
 
 # Create router first - needed by endpoints
-router = APIRouter(tags=["proxy"])
+router = APIRouter(
+    tags=["proxy"]
+)
 
 # Import non-dependent utilities
 from .utils import cleanup_port, try_close_sockets, find_processes_using_port  # noqa: F401
@@ -31,7 +33,23 @@ from .models import *  # noqa: F403
 from .analysis_models import *  # noqa: F403
 
 # Import endpoints last, after all dependencies are ready
-from .endpoints import *  # noqa: F403
+from .endpoints import (  # noqa: F403
+    create_session,
+    start_proxy,
+    stop_proxy,
+    get_history,
+    clear_history,
+    get_analysis_results,
+    clear_analysis_results,
+    get_proxy_status,
+    create_rule,
+    update_rule,
+    delete_rule,
+    list_rules,
+    reorder_rules,
+    get_connections,
+    health_check
+)
 
 # Define exports
 __all__ = [

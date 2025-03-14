@@ -1,30 +1,31 @@
-"""Proxy middleware and response classes."""
-from dataclasses import dataclass
-from typing import Dict, Any, Optional, List
+"""Middleware for handling proxy requests."""
+from typing import Optional, Callable, Awaitable, Any
+import logging
+from .http import ProxyResponse
 
-@dataclass
-class ProxyResponse:
-    """Represents a response from the proxy middleware."""
-    status_code: int
-    headers: Dict[str, str]
-    body: Optional[bytes] = None
-    modified: bool = False
-    intercept_enabled: bool = True
-    tags: List[str] = None
+logger = logging.getLogger("proxy.core")
 
-    def __post_init__(self):
-        if self.tags is None:
-            self.tags = []
-
-async def proxy_middleware(request: Dict[str, Any]) -> Optional[ProxyResponse]:
-    """Default proxy middleware for handling requests.
-    
-    Args:
-        request: Dictionary containing request details
-    
-    Returns:
-        Optional[ProxyResponse]: Response if request should be modified,
-                               None to pass through unmodified
-    """
-    # Default implementation passes through requests unmodified
-    return None
+async def proxy_middleware(request: Any, call_next: Callable[[Any], Awaitable[ProxyResponse]]) -> ProxyResponse:
+    """Basic proxy middleware that logs requests and handles errors."""
+    try:
+        # Log the incoming request
+        logger.info(f"Proxy request: {request.method} {request.url}")
+        
+        # Call the next handler
+        response = await call_next(request)
+        
+        # Log the response
+        logger.info(f"Proxy response: {response.status_code}")
+        
+        return response
+        
+    except Exception as e:
+        # Log the error
+        logger.error(f"Proxy error: {e}", exc_info=True)
+        
+        # Return a 500 error response
+        return ProxyResponse(
+            status_code=500,
+            headers={"content-type": "text/plain"},
+            body=b"Internal proxy error"
+        )

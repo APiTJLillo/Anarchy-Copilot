@@ -1,5 +1,6 @@
 """FastAPI endpoints for proxy functionality."""
-from fastapi import WebSocket
+
+from . import router
 
 __all__ = [
     "create_session",
@@ -16,6 +17,7 @@ __all__ = [
     "list_rules",
     "reorder_rules",
     "get_connections",
+    "health_check"
 ]
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException
@@ -48,15 +50,6 @@ def get_settings() -> Settings:
     """Get cached settings instance."""
     return Settings()
 
-
-router = APIRouter()
-
-@router.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    """WebSocket endpoint for real-time connection updates."""
-    from .websocket import handle_proxy_connection_updates
-    await handle_proxy_connection_updates(websocket)
-logger = logging.getLogger(__name__)
 
 # Session Management
 @router.post("/sessions", response_model=models.ProxySession)
@@ -198,6 +191,16 @@ async def get_history(
         # Execute and handle results properly
         result = await db.execute(stmt)
         entries = list(result.scalars().all())
+        
+        # Ensure request_headers is always a dictionary
+        for entry in entries:
+            if entry.request_headers is None:
+                entry.request_headers = {}
+            if entry.response_headers is None:
+                entry.response_headers = {}
+            if entry.tags is None:
+                entry.tags = []
+        
         return entries
     except Exception as e:
         logger.error(f"Failed to get history: {e}")
@@ -298,19 +301,27 @@ async def get_connections(db: AsyncSession = Depends(get_db)) -> List[models.Con
         logger.error(f"Failed to get connections: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+# Status endpoint
 @router.get("/status")
 async def get_proxy_status(db: AsyncSession = Depends(get_db)) -> dict:
-    """Get the current proxy status."""
+    """Get current proxy status."""
     try:
         # Get active session
-        stmt = select(ProxySession).where(ProxySession.is_active == True)
-        result = await db.execute(stmt)
+        result = await db.execute(
+            select(ProxySession)
+            .where(ProxySession.is_active == True)
+            .order_by(ProxySession.start_time.desc())
+            .limit(1)
+        )
         active_session = result.scalar_one_or_none()
 
-        # Get latest history entries - limited to scalar values
-        stmt = select(ProxyHistoryEntry.id).order_by(ProxyHistoryEntry.timestamp.desc()).limit(100)
-        result = await db.execute(stmt)
-        recent_history_ids = [row[0] for row in result]
+        # Get recent history entries
+        history_result = await db.execute(
+            select(ProxyHistoryEntry.id)
+            .order_by(ProxyHistoryEntry.timestamp.desc())
+            .limit(100)
+        )
+        recent_history_ids = [row[0] for row in history_result]
 
         return {
             "isRunning": active_session is not None,
@@ -455,3 +466,8 @@ async def reorder_rules(
     
     await db.commit()
     return {"message": "Rules reordered successfully"}
+
+@router.get("/health")
+async def health_check() -> dict:
+    """Health check endpoint."""
+    return {"status": "ok"}

@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from api.proxy.database_models import ProxyHistoryEntry, ProxySession as DBProxySession
 
 from .custom_protocol import TunnelProtocol
+from .protocol.https_intercept import HttpsInterceptProtocol
 from .protocol import HttpsInterceptProtocol
 from ..interceptor import RequestInterceptor, ResponseInterceptor, InterceptedRequest, InterceptedResponse
 from ..encoding import ContentEncodingInterceptor
@@ -90,51 +91,22 @@ class BaseStats(TypedDict, total=False):
     proxy: ProxyStats
 
 class ProxyServer:
-    """HTTPS-capable proxy server with certificate management."""
+    """Proxy server implementation."""
 
-    def __init__(self, config: Optional[ProxyConfig] = None, ca_instance: Optional[CertificateAuthority] = None):
-        """Initialize proxy server.
-        
-        Args:
-            config: Optional proxy configuration
-            ca_instance: Optional pre-initialized Certificate Authority instance
-        """
-        self._config = config or ProxyConfig()
-        logger.info(f"Initializing proxy server with config: {self._config}")
-        
-        # Initialize server components
-        self._server = None
+    def __init__(self, config: ProxyConfig, ca_instance=None):
+        """Initialize proxy server with configuration and optional CA instance."""
+        self._config = config
+        self.ca = ca_instance
+        self.loop = None
+        self.server = None
+        self.port = None
+        self._active_connections = {}
+        self._interceptors = []
+        self._tasks = set()
         self._is_running = False
-        self._lock = asyncio.Lock()
-        self._ca = ca_instance
-        self._tasks: set[asyncio.Task] = set()
-        self._loop: Optional[asyncio.AbstractEventLoop] = None
-        self._port: Optional[int] = None
-        
-        # Initialize request/response tracking
-        self._pending_requests: Dict[str, Any] = {}
-        self._pending_responses: Dict[str, Any] = {}
-        
-        # Initialize interceptors
-        self._request_interceptors: List[RequestInterceptor] = []
-        self._response_interceptors: List[ResponseInterceptor] = []
-        self._analyzer: Optional[TrafficAnalyzer] = None
-        self._add_default_interceptors = True
-        
-        # Initialize session
-        self._session: Optional[ProxySession] = None
-        
-        # Initialize memory tracking
-        self._memory: MemoryStats = {
-            'samples': [],
-            'timestamps': [],
-            'total': 0,
-            'used': 0,
-            'free': 0
-        }
-        
-        # Initialize stats
-        self._stats: ProxyStats = {
+        self._session = None
+        self._serve_task = None
+        self._stats = {
             'total_requests': 0,
             'active_connections': 0,
             'bytes_sent': 0,
@@ -142,21 +114,238 @@ class ProxyServer:
             'memory_usage': 0.0,
             'cpu_usage': 0.0
         }
-        
-        # Initialize base stats
-        self._base_stats: BaseStats = {
+        self._memory = {
+            'samples': [],
+            'timestamps': [],
+            'total': 0,
+            'used': 0,
+            'free': 0
+        }
+        self._base_stats = {
             'memory': self._memory,
             'proxy': self._stats
         }
+        self._setup_logging()
+        self._setup_interceptors()
+
+    def _setup_interceptors(self):
+        """Set up proxy interceptors."""
+        logger.debug("Setting up interceptors")
+        try:
+            # Add global interceptors
+            self._interceptors.append(ContentEncodingInterceptor())
+            logger.debug("Added ContentEncodingInterceptor")
+            
+            # Add database interceptor
+            from proxy.interceptors.database import DatabaseInterceptor
+            self._interceptors.append(DatabaseInterceptor(str(uuid.uuid4())))
+            logger.debug("Added DatabaseInterceptor")
+        except Exception as e:
+            logger.error(f"Error setting up interceptors: {e}", exc_info=True)
+            raise
+
+    async def handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        """Handle incoming connection."""
+        connection_id = str(uuid.uuid4())
+        logger.debug(f"New connection {connection_id}")
+        
+        try:
+            # Read the initial request line
+            request_line = await reader.readline()
+            if not request_line:
+                logger.warning(f"[{connection_id}] Empty request received")
+                writer.close()
+                return
+
+            # Parse request line
+            try:
+                method, target, version = request_line.decode().strip().split(' ')
+                logger.debug(f"[{connection_id}] {method} {target} {version}")
+            except Exception as e:
+                logger.error(f"[{connection_id}] Failed to parse request line: {e}")
+                writer.write(b"HTTP/1.1 400 Bad Request\r\n\r\n")
+                writer.close()
+                return
+
+            # For CONNECT requests, use HTTPS interception protocol
+            if method == 'CONNECT':
+                try:
+                    # Parse target host and port
+                    target_host, target_port = target.split(':')
+                    target_port = int(target_port)
+                    
+                    # Create protocol instance with connection-specific settings
+                    protocol = HttpsInterceptProtocol(
+                        connection_id=connection_id,
+                        target_host=target_host,
+                        target_port=target_port,
+                        ca=self.ca,
+                        cert_manager=cert_manager,
+                        db_interceptor=None,  # Will be created when needed
+                        client_transport=writer.transport
+                    )
+                    
+                    # Store connection info
+                    self._active_connections[connection_id] = {
+                        'reader': reader,
+                        'writer': writer,
+                        'protocol': protocol,
+                        'start_time': time.time()
+                    }
+                    
+                    # Set up the transport for the protocol
+                    protocol.connection_made(writer.transport)
+                    
+                    # Process the CONNECT request
+                    protocol.data_received(request_line)
+                    
+                except Exception as e:
+                    logger.error(f"[{connection_id}] Error handling CONNECT request: {e}")
+                    writer.write(b"HTTP/1.1 500 Internal Server Error\r\n\r\n")
+                    writer.close()
+                    return
+                    
+            else:
+                # For non-CONNECT requests, use regular HTTP handling
+                try:
+                    # Read headers
+                    headers = {}
+                    while True:
+                        line = await reader.readline()
+                        if line in (b'\r\n', b''):
+                            break
+                        try:
+                            name, value = line.decode().split(':', 1)
+                            headers[name.strip().lower()] = value.strip()
+                        except ValueError:
+                            continue
+
+                    # Create protocol instance
+                    protocol = TunnelProtocol(
+                        connection_id=connection_id,
+                        client_transport=writer.transport
+                    )
+                    
+                    # Store connection info
+                    self._active_connections[connection_id] = {
+                        'reader': reader,
+                        'writer': writer,
+                        'protocol': protocol,
+                        'start_time': time.time()
+                    }
+                    
+                    # Process the request
+                    await self._handle_regular_request(method, target, version, headers, reader, writer, f"[{connection_id}]")
+                    
+                except Exception as e:
+                    logger.error(f"[{connection_id}] Error handling regular request: {e}")
+                    writer.write(b"HTTP/1.1 500 Internal Server Error\r\n\r\n")
+                    writer.close()
+                    return
+            
+            # Process the connection
+            await self._process_connection(connection_id, reader, writer, protocol)
+            
+        except Exception as e:
+            logger.error(f"[{connection_id}] Error handling connection: {e}")
+            writer.close()
+            await writer.wait_closed()
+            
+        finally:
+            if connection_id in self._active_connections:
+                del self._active_connections[connection_id]
+
+    def _setup_logging(self):
+        """Set up logging configuration."""
+        # Configure root logger if not already configured
+        root_logger = logging.getLogger()
+        if not root_logger.handlers:
+            handler = logging.StreamHandler()
+            formatter = logging.Formatter(
+                '%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+                datefmt='%Y-%m-%d %H:%M:%S'
+            )
+            handler.setFormatter(formatter)
+            root_logger.addHandler(handler)
+            root_logger.setLevel(logging.INFO)
+
+        # Configure proxy logger
+        proxy_logger = logging.getLogger("proxy.core")
+        proxy_logger.setLevel(logging.DEBUG)
+
+    async def _process_connection(self, connection_id: str, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, protocol: Any) -> None:
+        """Process a client connection."""
+        try:
+            # Set up protocol
+            protocol.transport = writer.transport
+            
+            # Process data
+            while True:
+                try:
+                    data = await reader.read(8192)  # 8KB chunks
+                    if not data:
+                        logger.debug(f"Connection {connection_id} closed by peer")
+                        break
+                        
+                    # Process data through protocol
+                    protocol.data_received(data)
+                    
+                except ConnectionError as e:
+                    logger.debug(f"Connection {connection_id} error: {e}")
+                    break
+                    
+        except Exception as e:
+            logger.error(f"Error processing connection {connection_id}: {e}", exc_info=True)
+            
+        finally:
+            # Clean up
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except:
+                pass
+            
+            if connection_id in self._active_connections:
+                del self._active_connections[connection_id]
+                
+            logger.debug(f"Connection {connection_id} closed")
 
     @classmethod
     def configure(cls, config_dict: dict) -> None:
         """Configure the proxy server with the given settings."""
+        logger.debug("Configuring proxy server")
+        logger.debug(f"Configuration: {config_dict}")
         global _instance
-        if (_instance is None):
-            _instance = cls(ProxyConfig(**config_dict))
-        else:
-            _instance.config = ProxyConfig(**config_dict)
+        try:
+            if (_instance is None):
+                logger.debug("Creating new ProxyServer instance")
+                try:
+                    logger.debug("Creating ProxyConfig from config_dict")
+                    config = ProxyConfig(**config_dict)
+                    logger.debug(f"Created ProxyConfig: {config}")
+                    
+                    logger.debug("Creating ProxyServer instance")
+                    _instance = cls(config)
+                    logger.debug("Successfully created ProxyServer instance")
+                except Exception as e:
+                    logger.error(f"Failed to create ProxyServer instance: {e}", exc_info=True)
+                    raise
+            else:
+                logger.debug("Updating existing ProxyServer instance configuration")
+                try:
+                    logger.debug("Creating new ProxyConfig from config_dict")
+                    config = ProxyConfig(**config_dict)
+                    logger.debug(f"Created ProxyConfig: {config}")
+                    
+                    logger.debug("Updating ProxyServer configuration")
+                    _instance._config = config
+                    logger.debug("Successfully updated ProxyServer configuration")
+                except Exception as e:
+                    logger.error(f"Failed to update ProxyServer configuration: {e}", exc_info=True)
+                    raise
+        except Exception as e:
+            logger.error(f"Error in configure method: {e}", exc_info=True)
+            raise
 
     @property
     def config(self) -> ProxyConfig:
@@ -170,10 +359,10 @@ class ProxyServer:
 
     def create_task(self, coro) -> asyncio.Task:
         """Create a task in the server's event loop."""
-        if not self._loop:
+        if not self.loop:
             raise RuntimeError("Server not started - no event loop available")
             
-        task = self._loop.create_task(coro)
+        task = self.loop.create_task(coro)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
         return task
@@ -188,12 +377,19 @@ class ProxyServer:
             else:
                 logger.info(f"Found {len(active_sessions)} active proxy sessions")
 
+            logger.debug("Setting up server components")
             # Set up interceptors
-            self._setup_interceptors()
+            try:
+                logger.debug("Initializing interceptors")
+                self._setup_interceptors()
+                logger.debug("Interceptors initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize interceptors: {e}", exc_info=True)
+                raise
 
             # Verify CA is available
             # Initialize CA and certificate manager
-            if not self._ca:
+            if not self.ca:
                 logger.error("No Certificate Authority provided. HTTPS interception will be disabled.")
                 raise RuntimeError("Certificate Authority is required for proxy operation")
 
@@ -206,7 +402,7 @@ class ProxyServer:
 
             # Set CA in certificate manager
             logger.info("Configuring certificate manager with CA...")
-            cert_manager.set_ca(self._ca)
+            cert_manager.set_ca(self.ca)
 
             # Start certificate manager - this will also initialize the CA
             logger.info("Starting certificate manager...")
@@ -239,30 +435,30 @@ class ProxyServer:
                         retry_delay *= 2
                     else:
                         logger.error("All initialization attempts failed")
-                        self._ca = None
+                        self.ca = None
                         raise RuntimeError(f"Failed to initialize certificate handling after {max_retries} attempts: {last_error}")
 
             logger.info("Certificate handling initialization completed successfully")
 
             # Create server
-            self._server = await asyncio.start_server(
-                self._handle_client,
-                self.config.host,
-                self.config.port,
+            self.server = await asyncio.start_server(
+                self.handle_connection,
+                self._config.host,
+                self._config.port,
                 reuse_address=True,
                 reuse_port=True
             )
             
             # Store port for cleanup
-            self._port = self.config.port
+            self.port = self._config.port
             
-            logger.info(f"Proxy server started on {self.config.host}:{self.config.port}")
+            logger.info(f"Proxy server started on {self._config.host}:{self._config.port}")
             
             # Get or create event loop
-            self._loop = asyncio.get_running_loop()
+            self.loop = asyncio.get_running_loop()
             
             # Create and monitor server task
-            serve_task = self._loop.create_task(self._server.serve_forever())
+            serve_task = self.loop.create_task(self.server.serve_forever())
             
             def _on_server_task_done(task: asyncio.Task) -> None:
                 self._tasks.discard(task)
@@ -290,7 +486,7 @@ class ProxyServer:
                 return handler
                 
             for sig in (signal.SIGTERM, signal.SIGINT):
-                self._loop.add_signal_handler(sig, make_signal_handler(sig))
+                self.loop.add_signal_handler(sig, make_signal_handler(sig))
             
             # Set running flag
             self._is_running = True
@@ -310,12 +506,12 @@ class ProxyServer:
         try:
             # Log initial connection state
             logger.debug(f"{log_prefix} New client connection")
-            logger.debug(f"{log_prefix} CA instance available: {self._ca is not None}")
-            if self._ca:
-                logger.debug(f"{log_prefix} CA certificate path: {self._ca.ca_cert_path}")
-                logger.debug(f"{log_prefix} CA key path: {self._ca.ca_key_path}")
-                logger.debug(f"{log_prefix} CA certificate exists: {self._ca.ca_cert_path.exists()}")
-                logger.debug(f"{log_prefix} CA key exists: {self._ca.ca_key_path.exists()}")
+            logger.debug(f"{log_prefix} CA instance available: {self.ca is not None}")
+            if self.ca:
+                logger.debug(f"{log_prefix} CA certificate path: {self.ca.ca_cert_path}")
+                logger.debug(f"{log_prefix} CA key path: {self.ca.ca_key_path}")
+                logger.debug(f"{log_prefix} CA certificate exists: {self.ca.ca_cert_path.exists()}")
+                logger.debug(f"{log_prefix} CA key exists: {self.ca.ca_key_path.exists()}")
             
             self._stats['active_connections'] += 1
             
@@ -350,7 +546,7 @@ class ProxyServer:
             # Handle CONNECT tunneling differently
             if method == 'CONNECT':
                 logger.debug(f"{log_prefix} Processing CONNECT request")
-                await self._handle_connect_tunnel(target, reader, writer, headers, log_prefix)
+                await self._handle_connect_tunnel(request_line, reader, writer)
             else:
                 logger.debug(f"{log_prefix} Processing regular request")
                 await self._handle_regular_request(method, target, version, headers, reader, writer, log_prefix)
@@ -363,147 +559,54 @@ class ProxyServer:
         finally:
             self._stats['active_connections'] -= 1
 
-    async def _handle_connect_tunnel(self, target: str, reader: asyncio.StreamReader, 
-                                   writer: asyncio.StreamWriter, headers: dict,
-                                   log_prefix: str) -> None:
-        """Handle CONNECT tunnel requests."""
+    async def _handle_connect_tunnel(self, request_line: bytes, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        """Handle CONNECT tunnel request with TLS interception."""
         try:
-            host, port_str = target.split(':')
-            port = int(port_str)
-            logger.debug(f"{log_prefix} Parsed CONNECT target - Host: {host}, Port: {port}")
-        except ValueError as e:
-            logger.error(f"{log_prefix} Invalid CONNECT target: {target}")
-            writer.write(b"HTTP/1.1 400 Bad Request\r\n\r\n")
-            await writer.drain()
-            return
-
-        try:
-            # Log connection attempt
-            logger.debug(f"{log_prefix} Attempting to connect to {host}:{port}")
-            logger.debug(f"{log_prefix} Using CA: {self._ca is not None}")
-            if self._ca:
-                logger.debug(f"{log_prefix} CA certificate status: {self._ca.ca_cert_path.exists()}")
-                logger.debug(f"{log_prefix} CA key status: {self._ca.ca_key_path.exists()}")
+            # Parse target host and port
+            target = request_line.decode().split()[1]
+            target_host, target_port = target.split(':')
+            target_port = int(target_port)
             
-            # Connect to target
-            target_reader, target_writer = await asyncio.open_connection(host, port)
-            logger.debug(f"{log_prefix} Successfully connected to target")
-
-            # Send 200 Connection Established
-            writer.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
-            await writer.drain()
-            logger.debug(f"{log_prefix} Sent Connection Established response")
-
-            # Create database interceptor for this connection
+            # Generate unique connection ID
             connection_id = str(uuid.uuid4())
-            db_interceptor = DatabaseInterceptor(connection_id)
-
-            # Create bidirectional tunnel
-            logger.debug(f"{log_prefix} Creating bidirectional tunnel")
-            await self._create_tunnel(
-                (reader, writer),
-                (target_reader, target_writer),
-                log_prefix,
-                db_interceptor
-            )
-            logger.debug(f"{log_prefix} Tunnel closed")
+            logger.debug(f"New connection {connection_id}")
             
-            # Clean up interceptor
-            await db_interceptor.close()
+            # Create database interceptor
+            db_interceptor = DatabaseInterceptor(connection_id)
+            
+            # Create protocol
+            protocol = HttpsInterceptProtocol(
+                connection_id=connection_id,
+                target_host=target_host,
+                target_port=target_port,
+                ca=self.ca,
+                cert_manager=cert_manager,
+                db_interceptor=db_interceptor,
+                client_transport=writer.transport
+            )
+            
+            # Store connection info
+            self._active_connections[connection_id] = {
+                'reader': reader,
+                'writer': writer,
+                'protocol': protocol
+            }
+            
+            # Send 200 Connection Established
+            writer.write(b'HTTP/1.1 200 Connection Established\r\n\r\n')
+            await writer.drain()
+            
+            # Establish tunnel and set up TLS
+            await protocol.establish_tunnel(target_host, target_port)
+            
+            # Process connection
+            await self._process_connection(connection_id, reader, writer, protocol)
             
         except Exception as e:
-            logger.error(f"{log_prefix} Tunnel error: {str(e)}", exc_info=True)
-            writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
+            logger.error(f"Error handling CONNECT tunnel: {e}", exc_info=True)
+            writer.write(b'HTTP/1.1 502 Bad Gateway\r\n\r\n')
             await writer.drain()
-
-    async def _create_tunnel(self, client: Tuple[asyncio.StreamReader, asyncio.StreamWriter],
-                           target: Tuple[asyncio.StreamReader, asyncio.StreamWriter],
-                           log_prefix: str,
-                           db_interceptor: Optional[DatabaseInterceptor] = None) -> None:
-        """Create bidirectional tunnel between client and target."""
-        client_reader, client_writer = client
-        target_reader, target_writer = target
-        logger.debug(f"{log_prefix} Setting up tunnel forwarding")
-
-        async def forward(reader: asyncio.StreamReader, 
-                        writer: asyncio.StreamWriter,
-                        direction: str) -> None:
-            """Forward data between endpoints."""
-            try:
-                logger.debug(f"{log_prefix} Starting {direction} forwarding")
-                bytes_forwarded = 0
-                while True:
-                    data = await reader.read(8192)
-                    if not data:
-                        logger.debug(f"{log_prefix} [{direction}] End of stream")
-                        break
-
-                    # Store data in database if interceptor is available
-                    if db_interceptor:
-                        try:
-                            await db_interceptor.store_raw_data(direction, data)
-                        except Exception as e:
-                            logger.error(f"{log_prefix} [{direction}] Error storing data: {e}")
-
-                    await writer.drain()
-                    writer.write(data)
-                    bytes_forwarded += len(data)
-                    
-                    # Update stats
-                    if direction == "client->target":
-                        self._stats['bytes_sent'] += len(data)
-                    else:
-                        self._stats['bytes_received'] += len(data)
-                        
-                    # Log progress periodically
-                    if bytes_forwarded % (1024 * 1024) == 0:  # Log every MB
-                        logger.debug(f"{log_prefix} [{direction}] Forwarded {bytes_forwarded/1024/1024:.2f} MB")
-                        
-            except Exception as e:
-                logger.error(f"{log_prefix} [{direction}] Forward error: {str(e)}", exc_info=True)
-            finally:
-                try:
-                    logger.debug(f"{log_prefix} [{direction}] Closing writer")
-                    writer.close()
-                    await writer.wait_closed()
-                except:
-                    pass
-
-        # Create tasks for both directions
-        logger.debug(f"{log_prefix} Creating forwarding tasks")
-        forward_client = asyncio.create_task(
-            forward(client_reader, target_writer, "client->target")
-        )
-        forward_target = asyncio.create_task(
-            forward(target_reader, client_writer, "target->client")
-        )
-
-        # Wait for either direction to complete
-        logger.debug(f"{log_prefix} Waiting for tunnel completion")
-        done, pending = await asyncio.wait(
-            [forward_client, forward_target],
-            return_when=asyncio.FIRST_COMPLETED
-        )
-        
-        # Log completion status
-        for task in done:
-            try:
-                exc = task.exception()
-                if exc:
-                    logger.error(f"{log_prefix} Task failed: {exc}", exc_info=exc)
-            except asyncio.CancelledError:
-                logger.debug(f"{log_prefix} Task was cancelled")
-                
-        # Cancel any pending tasks
-        for task in pending:
-            logger.debug(f"{log_prefix} Cancelling pending task")
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-            
-        logger.debug(f"{log_prefix} Tunnel forwarding completed")
+            writer.close()
 
     async def _handle_regular_request(self, method: str, target: str, version: str,
                                     headers: dict, reader: asyncio.StreamReader,
@@ -583,20 +686,6 @@ class ProxyServer:
             writer.write(b"HTTP/1.1 502 Bad Gateway\r\n\r\n")
             await writer.drain()
 
-    def _setup_interceptors(self) -> None:
-        """Set up default interceptors."""
-        if self._add_default_interceptors:
-            # Add content encoding interceptor
-            self._response_interceptors.append(ContentEncodingInterceptor())
-            
-            # Add debug interceptor if in debug mode
-            if getattr(self._config, 'debug', False):
-                debug_interceptor = DebugInterceptor()
-                if isinstance(debug_interceptor, RequestInterceptor):
-                    self._request_interceptors.append(debug_interceptor)
-                if isinstance(debug_interceptor, ResponseInterceptor):
-                    self._response_interceptors.append(debug_interceptor)
-                
     def get_current_stats(self) -> Dict[str, Any]:
         """Get current server statistics.
         
@@ -626,7 +715,7 @@ class ProxyServer:
             
     async def _force_cleanup_port(self) -> None:
         """Force cleanup any processes using the proxy port."""
-        if not self._port:
+        if not self.port:
             return
 
         async def kill_process(pid: int, force: bool = False) -> None:
@@ -654,7 +743,7 @@ class ProxyServer:
             try:
                 for conn in proc.connections():
                     port = get_port_number(conn)
-                    if port == self._port:
+                    if port == self.port:
                         await kill_process(proc.pid)
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
@@ -662,19 +751,19 @@ class ProxyServer:
     async def _stop_certificate_authority(self) -> None:
         """Stop the certificate authority."""
         # Stop CA with graceful fallback
-        if self._ca:
+        if self.ca:
             try:
                 # Try cleanup/stop methods in sequence
                 for method in ['cleanup_old_certs', 'stop', 'close']:
-                    if hasattr(self._ca, method):
+                    if hasattr(self.ca, method):
                         try:
-                            await getattr(self._ca, method)()
+                            await getattr(self.ca, method)()
                         except Exception as e:
                             logger.warning(f"CA {method}() failed: {e}")
             except Exception as e:
                 logger.error(f"Error stopping CA: {e}")
             finally:
-                self._ca = None
+                self.ca = None
 
         # Cancel all tasks
         tasks = list(self._tasks)
@@ -698,28 +787,28 @@ class ProxyServer:
             self._is_running = False
 
             # Stop servers
-            if self._server:
-                self._server.close()
-                await self._server.wait_closed()
-                self._server = None
+            if self.server:
+                self.server.close()
+                await self.server.wait_closed()
+                self.server = None
 
             # Stop certificate manager
             if cert_manager and cert_manager.is_running():
                 await cert_manager.stop()
 
             # Stop CA with graceful fallback
-            if self._ca:
+            if self.ca:
                 try:
                     # Try cleanup/stop methods in sequence
                     for method in ['cleanup_old_certs', 'stop', 'close']:
-                        if hasattr(self._ca, method):
+                        if hasattr(self.ca, method):
                             try:
-                                await getattr(self._ca, method)()
+                                await getattr(self.ca, method)()
                             except Exception as e:
                                 logger.warning(f"CA {method}() failed: {e}")
                 except Exception as e:
                     logger.error(f"Error stopping CA: {e}")
-                self._ca = None
+                self.ca = None
 
             # Cancel all tasks
             for task in self._tasks:
@@ -786,17 +875,21 @@ class ProxyServer:
         window = samples[-window_size:] if window_size > 0 else samples
         return [window[i] - window[i-1] for i in range(1, len(window))]
 
-    def _create_tunnel_protocol(self, client_transport: asyncio.Transport) -> TunnelProtocol:
+    def _create_tunnel_protocol(self, client_transport: asyncio.Transport, connection_id: Optional[str] = None) -> TunnelProtocol:
         """Create a new tunnel protocol instance."""
-        connection_id = str(uuid.uuid4())
+        # Always ensure we have a connection_id
+        if connection_id is None:
+            connection_id = str(uuid4())
+            logger.debug(f"Generated new connection ID: {connection_id}")
+            
         flow_control = FlowControl(client_transport)
         return TunnelProtocol(
+            connection_id=connection_id,  # Now we're guaranteed to have a value
             client_transport=client_transport,
             flow_control=flow_control,
-            connection_id=connection_id,
             interceptor_class=DatabaseInterceptor,
-            buffer_size=self.config.buffer_size,
-            metrics_interval=self.config.metrics_interval,
-            write_limit=self.config.write_limit,
-            write_interval=self.config.write_interval
+            buffer_size=self._config.buffer_size,
+            metrics_interval=self._config.metrics_interval,
+            write_limit=self._config.write_limit,
+            write_interval=self._config.write_interval
         )

@@ -131,6 +131,44 @@ class ResponseInterceptor(ABC):
 class ProxyInterceptor(RequestInterceptor, ResponseInterceptor):
     """Base class for interceptors that can handle both requests and responses."""
     
+    # Registry of interceptor classes
+    _registry = set()
+
+    def __init_subclass__(cls, **kwargs):
+        """Register interceptor subclasses."""
+        super().__init_subclass__(**kwargs)
+        ProxyInterceptor._registry.add(cls)
+
+    def __init__(self, connection_id: Optional[str] = None):
+        """Initialize interceptor.
+        
+        Args:
+            connection_id: Optional unique ID for the connection. Only required for per-connection interceptors.
+        """
+        self.connection_id = connection_id or str(uuid4())  # Generate a default ID if none provided
+
+    async def _ensure_db(self) -> None:
+        """Ensure database connection is ready."""
+        pass
+
+    async def _get_active_session(self) -> Optional[int]:
+        """Get active session ID."""
+        return None
+
+    async def intercept(self, request: Union[InterceptedRequest, InterceptedResponse], 
+                       original_request: Optional[InterceptedRequest] = None) -> None:
+        """Intercept and process request/response.
+        
+        Args:
+            request: The request or response to intercept
+            original_request: The original request if intercepting a response
+        """
+        pass
+
+    async def close(self) -> None:
+        """Clean up resources."""
+        pass
+
     async def intercept_request(self, request: InterceptedRequest) -> InterceptedRequest:
         """Process an intercepted request.
         
@@ -144,16 +182,6 @@ class ProxyInterceptor(RequestInterceptor, ResponseInterceptor):
         Override this method to implement response interception.
         """
         return response
-
-    async def intercept(self, req_or_resp: Union[InterceptedRequest, InterceptedResponse], request: Optional[InterceptedRequest] = None) -> Union[InterceptedRequest, InterceptedResponse]:
-        """Route to appropriate intercept method based on argument type."""
-        if isinstance(req_or_resp, InterceptedRequest):
-            return await self.intercept_request(req_or_resp)
-        elif isinstance(req_or_resp, InterceptedResponse):
-            if request is None:
-                raise ValueError("Request parameter is required for response interception")
-            return await self.intercept_response(req_or_resp, request)
-        raise TypeError(f"Unexpected type: {type(req_or_resp)}")
 
 class JSONModifyInterceptor(RequestInterceptor):
     """Example interceptor that modifies JSON request bodies."""

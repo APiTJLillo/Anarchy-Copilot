@@ -35,33 +35,35 @@ async def get_active_sessions() -> List[dict]:
         - created_by: User ID who created the session
         - settings: Session settings dictionary
     """
+    db = AsyncSessionLocal()
     try:
-        async with AsyncSessionLocal() as db:
-            result = await db.execute(
-                text("""
-                    SELECT id, name, start_time, project_id, created_by, settings
-                    FROM proxy_sessions 
-                    WHERE is_active = true 
-                    ORDER BY start_time DESC
-                """)
-            )
-            sessions = result.fetchall()
-            logger.info(f"Found {len(sessions)} active proxy sessions")
-            
-            return [
-                {
-                    "id": session.id,
-                    "name": session.name,
-                    "start_time": str(session.start_time),  # Convert timestamp to string
-                    "project_id": session.project_id,
-                    "created_by": session.created_by,
-                    "settings": json.loads(session.settings) if isinstance(session.settings, str) else session.settings or {}
-                }
-                for session in sessions
-            ]
+        result = await db.execute(
+            text("""
+                SELECT id, name, start_time, project_id, created_by, settings
+                FROM proxy_sessions 
+                WHERE is_active = true 
+                ORDER BY start_time DESC
+            """)
+        )
+        sessions = result.fetchall()
+        logger.info(f"Found {len(sessions)} active proxy sessions")
+        
+        return [
+            {
+                "id": session.id,
+                "name": session.name,
+                "start_time": str(session.start_time),  # Convert timestamp to string
+                "project_id": session.project_id,
+                "created_by": session.created_by,
+                "settings": json.loads(session.settings) if isinstance(session.settings, str) else session.settings or {}
+            }
+            for session in sessions
+        ]
     except Exception as e:
         logger.error(f"Failed to get active sessions: {e}")
         return []
+    finally:
+        await db.close()
 
 @dataclass(eq=True)
 class HistoryEntry:

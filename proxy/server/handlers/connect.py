@@ -9,7 +9,7 @@ from typing import Tuple, Optional, Dict, Any, Union, List
 
 from ..flow_control import FlowControl
 from ..state import proxy_state
-from .tunnel_protocol import TunnelProtocol
+from ..custom_protocol import TunnelProtocol
 from ..tls_helper import cert_manager
 from .errors import (
     ProxyError, ConnectionError, TunnelError, SSLError,
@@ -183,8 +183,17 @@ class ConnectHandler:
         try:
             logger.info(f"[{self._connection_id}] Handling CONNECT request for {host}:{port} (TLS interception: {intercept_tls})")
             
-            # Create server-side tunnel protocol
-            tunnel_protocol = TunnelProtocol(f"{self._connection_id}-server")
+            # Create server-side tunnel protocol with required parameters
+            tunnel_protocol = TunnelProtocol(
+                connection_id=self._connection_id,  # Use the handler's connection_id directly
+                client_transport=self._client_transport,
+                flow_control=FlowControl(client_transport=self._client_transport),
+                interceptor_class=None,  # We'll set this later if needed
+                buffer_size=262144,  # Default 256KB buffer
+                metrics_interval=0.1,
+                write_limit=1048576,  # Default 1MB write limit
+                write_interval=0.0001
+            )
             
             # Connect to remote server
             logger.debug(f"[{self._connection_id}] Connecting to remote server {host}:{port}")

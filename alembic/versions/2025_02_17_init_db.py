@@ -234,29 +234,38 @@ def upgrade() -> None:
     op.create_table(
         'proxy_history',
         sa.Column('id', sa.Integer(), nullable=False),
-        sa.Column('timestamp', sa.DateTime(), nullable=True),
-        sa.Column('session_id', sa.Integer(), nullable=True),
-        sa.Column('method', sa.String(), nullable=True),
-        sa.Column('url', sa.String(), nullable=True),
+        sa.Column('timestamp', sa.DateTime(timezone=True), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
+        sa.Column('session_id', sa.Integer(), nullable=False),
+        sa.Column('method', sa.String(), nullable=False),
+        sa.Column('url', sa.String(), nullable=False),
         sa.Column('host', sa.String(), nullable=True),
         sa.Column('path', sa.String(), nullable=True),
-        sa.Column('request_headers', sqlite.JSON(), nullable=True),
-        sa.Column('request_body', sa.Text(), nullable=True),
         sa.Column('status_code', sa.Integer(), nullable=True),
+        sa.Column('tls_version', sa.String(), nullable=True),
+        sa.Column('cipher_suite', sa.String(), nullable=True),
+        sa.Column('certificate_info', sqlite.JSON(), nullable=True),
+        
+        # Request data
+        sa.Column('request_headers', sqlite.JSON(), nullable=True),
+        sa.Column('request_body', sa.Text(), nullable=True),  # Raw request body (base64 if binary)
+        sa.Column('decrypted_request', sa.Text(), nullable=True),  # Decrypted request body
+        
+        # Response data
         sa.Column('response_headers', sqlite.JSON(), nullable=True),
-        sa.Column('response_body', sa.Text(), nullable=True),
+        sa.Column('response_body', sa.Text(), nullable=True),  # Raw response body (base64 if binary)
+        sa.Column('decrypted_response', sa.Text(), nullable=True),  # Decrypted response body
+        
+        # Metadata
+        sa.Column('tags', sqlite.JSON(), nullable=True),  # List of tags (e.g., ["raw", "encrypted", "request", "response"])
+        sa.Column('is_intercepted', sa.Boolean(), server_default='1', nullable=False),
+        sa.Column('is_encrypted', sa.Boolean(), server_default='0', nullable=False),
         sa.Column('duration', sa.Float(), nullable=True),  # Request duration in seconds
-        sa.Column('tags', sqlite.JSON(), nullable=True),  # List of tags
         sa.Column('notes', sa.Text(), nullable=True),
-        sa.Column('is_intercepted', sa.Boolean(), nullable=True),
-        sa.Column('applied_rules', sqlite.JSON(), nullable=True),  # List of {rule_id, action, modifications}
-        sa.Column('tls_version', sa.String(), nullable=True),  # TLS version (e.g., "TLSv1.3")
-        sa.Column('cipher_suite', sa.String(), nullable=True),  # Cipher suite used
-        sa.Column('certificate_info', sqlite.JSON(), nullable=True),  # Certificate details
         sa.ForeignKeyConstraint(['session_id'], ['proxy_sessions.id'], ),
         sa.PrimaryKeyConstraint('id')
     )
-    op.create_index('ix_proxy_history_id', 'proxy_history', ['id'], unique=False)
+    op.create_index('ix_proxy_history_session_id', 'proxy_history', ['session_id'], unique=False)
+    op.create_index('ix_proxy_history_timestamp', 'proxy_history', ['timestamp'], unique=False)
 
     # Create tunnel_metrics table
     op.create_table(

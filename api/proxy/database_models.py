@@ -59,6 +59,21 @@ class ProxyHistoryEntry(Base):
     tls_version = Column(String, nullable=True)
     cipher_suite = Column(String, nullable=True)
     certificate_info = Column(JSON, nullable=True)
+    
+    # Request data
+    request_headers = Column(JSON, nullable=True)
+    request_body = Column(Text, nullable=True)  # Raw request body (base64 if binary)
+    decrypted_request = Column(Text, nullable=True)  # Decrypted request body
+    
+    # Response data
+    response_headers = Column(JSON, nullable=True)
+    response_body = Column(Text, nullable=True)  # Raw response body (base64 if binary)
+    decrypted_response = Column(Text, nullable=True)  # Decrypted response body
+    
+    # Metadata
+    tags = Column(JSON, nullable=True)  # List of tags (e.g., ["raw", "encrypted", "request", "response"])
+    is_intercepted = Column(Boolean, default=True)
+    is_encrypted = Column(Boolean, default=False)
 
     session = relationship("ProxySession", back_populates="history_entries")
 

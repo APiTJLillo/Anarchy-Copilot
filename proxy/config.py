@@ -14,7 +14,13 @@ class ProxyConfig:
     max_keepalive_connections: int = 20
     keepalive_timeout: int = 30
     history_size: int = 1000
-
+    buffer_size: int = 262144  # 256KB default buffer size
+    
+    # Tunnel settings
+    metrics_interval: float = 0.1  # Interval for metrics collection
+    write_limit: int = 1048576  # 1MB write limit
+    write_interval: float = 0.0001  # Write interval for rate limiting
+    
     # Feature flags
     websocket_support: bool = True
     http2_support: bool = False

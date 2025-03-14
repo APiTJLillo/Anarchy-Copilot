@@ -170,29 +170,14 @@ async def health_check():
                 content={"status": "error", "message": str(exception)}
             )
             
-    # Include memory stats in health check if available
-    response = {
-        "status": "healthy",
-        "message": "Proxy server is running",
-        "port": state.proxy_server._port if state.proxy_server else None,
-        "shutting_down": state.is_shutting_down,
-    }
-    
-    # Add memory statistics if available
-    if hasattr(state.proxy_server, '_stats'):
-        try:
-            mem_stats = state.proxy_server._stats.get_memory_deltas()
-            response["memory_stats"] = {
-                "rss_delta_mb": round(mem_stats["rss"] / 1024 / 1024, 2),
-                "vms_delta_mb": round(mem_stats["vms"] / 1024 / 1024, 2),
-                "shared_delta_mb": round(mem_stats["shared"] / 1024 / 1024, 2),
-                "sample_count": len(state.proxy_server._stats.memory_samples),
-                "last_sample_time": state.proxy_server._stats.memory_samples[-1].timestamp if state.proxy_server._stats.memory_samples else None
-            }
-        except Exception as e:
-            logger.warning(f"Failed to include memory stats in health check: {e}")
-    
-    return response
+    # Return minimal response for health checks
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "healthy",
+            "message": "Proxy server is running"
+        }
+    )
 
 @app.get("/memory/stats")
 async def get_memory_stats():

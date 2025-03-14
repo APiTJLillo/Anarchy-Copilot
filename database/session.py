@@ -2,12 +2,27 @@
 from typing import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import sessionmaker, configure_mappers
 
 SQLALCHEMY_DATABASE_URL = "sqlite+aiosqlite:///./data/proxy.db"
 
-engine = create_async_engine(SQLALCHEMY_DATABASE_URL)
-AsyncSessionLocal = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+# Configure SQLAlchemy mappers
+configure_mappers()
+
+# Create engine with echo for debugging
+engine = create_async_engine(
+    SQLALCHEMY_DATABASE_URL,
+    echo=True,  # Enable SQL logging
+    pool_pre_ping=True  # Enable connection health checks
+)
+
+# Create session factory with explicit configuration
+AsyncSessionLocal = sessionmaker(
+    bind=engine,
+    class_=AsyncSession,
+    expire_on_commit=False,  # Prevent expired object errors
+    future=True  # Use future API
+)
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """Get a database session."""

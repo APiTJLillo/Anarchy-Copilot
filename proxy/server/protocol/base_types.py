@@ -1,11 +1,11 @@
-"""Base types and interfaces for proxy protocols."""
-from typing import Protocol, Optional, Dict, Any, Tuple
+"""Base type definitions for TLS handling."""
+from typing import Protocol, Optional, Union, Awaitable, Dict, Any, List, Tuple
 import asyncio
 import ssl
 
 class TlsCapableProtocol(Protocol):
-    """Interface for protocols that can handle TLS connections."""
-    
+    """Protocol for TLS-capable connections."""
+
     @property
     def transport(self) -> Optional[asyncio.Transport]:
         """Get the current transport."""
@@ -28,28 +28,30 @@ class TlsCapableProtocol(Protocol):
         ...
 
 class TlsContextProvider(Protocol):
-    """Interface for objects that can provide TLS contexts."""
-    
+    """Protocol for TLS context providers."""
     def get_server_context(self, hostname: str) -> ssl.SSLContext:
-        """Get SSL context for server side."""
+        """Get server SSL context."""
         ...
-        
+    
     def get_client_context(self, hostname: str) -> ssl.SSLContext:
-        """Get SSL context for client side."""
+        """Get client SSL context."""
         ...
 
 class TlsHandlerBase(Protocol):
-    """Base interface for TLS handlers."""
-    
-    async def wrap_client(self, protocol: TlsCapableProtocol,
-                         server_hostname: str,
-                         alpn_protocols: Optional[list[str]] = None) -> Tuple[asyncio.Transport, TlsCapableProtocol]:
+    """Base protocol for TLS handlers."""
+    async def wrap_client(self,
+                       protocol: TlsCapableProtocol, 
+                       server_hostname: str,
+                       alpn_protocols: Optional[List[str]] = None
+                       ) -> Tuple[asyncio.Transport, TlsCapableProtocol]:
         """Wrap client connection with TLS."""
         ...
-        
-    async def wrap_server(self, protocol: TlsCapableProtocol,
-                         server_hostname: Optional[str] = None,
-                         alpn_protocols: Optional[list[str]] = None) -> Tuple[asyncio.Transport, TlsCapableProtocol]:
+
+    async def wrap_server(self,
+                       protocol: TlsCapableProtocol,
+                       server_hostname: str,
+                       alpn_protocols: Optional[List[str]] = None
+                       ) -> Tuple[asyncio.Transport, TlsCapableProtocol]:
         """Wrap server connection with TLS."""
         ...
         

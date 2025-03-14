@@ -2,6 +2,7 @@
 import asyncio
 import logging
 from typing import Dict, Any, Optional
+from datetime import datetime
 
 logger = logging.getLogger("proxy.core")
 
@@ -48,16 +49,134 @@ class TlsState:
         return self._state.copy()
 
 class StateManager:
-    """Manages connection state and TLS state tracking."""
+    """Manages protocol state for HTTPS interception."""
 
-    def __init__(self, connection_id: str):
+    def __init__(self, connection_id: Optional[str] = None):
+        """Initialize state manager.
+        
+        Args:
+            connection_id: Optional connection ID
+        """
         self._connection_id = connection_id
-        self.tls_state = TlsState()
-        self._intercept_enabled = False
+        self._state = {
+            'handshake_complete': False,
+            'client_hello_received': False,
+            'server_hello_received': False,
+            'is_client_side': True,
+            'tls_version': None,
+            'cipher_suite': None,
+            'start_time': datetime.utcnow(),
+            'last_activity': datetime.utcnow(),
+            'bytes_sent': 0,
+            'bytes_received': 0,
+            'requests_processed': 0,
+            'responses_processed': 0
+        }
+        self._metadata: Dict[str, Any] = {}
         self._tunnel_established = False
-        self._last_error: Optional[str] = None
+        self._intercept_enabled = False
+        self._last_error = None
         self._negotiation_retries = 0
-        self._max_negotiation_retries = 3
+        self.tls_state = TlsState()
+        
+        if connection_id:
+            logger.debug(f"[{connection_id}] StateManager initialized")
+
+    def update_state(self, **kwargs) -> None:
+        """Update state values.
+        
+        Args:
+            **kwargs: State values to update
+        """
+        self._state.update(kwargs)
+        self._state['last_activity'] = datetime.utcnow()
+
+    def get_state(self, key: str) -> Any:
+        """Get state value.
+        
+        Args:
+            key: State key to get
+            
+        Returns:
+            State value or None if not found
+        """
+        return self._state.get(key)
+
+    def set_metadata(self, key: str, value: Any) -> None:
+        """Set metadata value.
+        
+        Args:
+            key: Metadata key
+            value: Metadata value
+        """
+        self._metadata[key] = value
+
+    def get_metadata(self, key: str) -> Optional[Any]:
+        """Get metadata value.
+        
+        Args:
+            key: Metadata key
+            
+        Returns:
+            Metadata value or None if not found
+        """
+        return self._metadata.get(key)
+
+    def is_handshake_complete(self) -> bool:
+        """Check if TLS handshake is complete.
+        
+        Returns:
+            True if handshake is complete
+        """
+        return self._state['handshake_complete']
+
+    def is_client_side(self) -> bool:
+        """Check if this is client side of connection.
+        
+        Returns:
+            True if client side
+        """
+        return self._state['is_client_side']
+
+    def get_connection_info(self) -> Dict[str, Any]:
+        """Get connection information.
+        
+        Returns:
+            Dictionary with connection information
+        """
+        now = datetime.utcnow()
+        duration = (now - self._state['start_time']).total_seconds()
+        idle_time = (now - self._state['last_activity']).total_seconds()
+        
+        return {
+            'duration': duration,
+            'idle_time': idle_time,
+            'bytes_sent': self._state['bytes_sent'],
+            'bytes_received': self._state['bytes_received'],
+            'requests': self._state['requests_processed'],
+            'responses': self._state['responses_processed'],
+            'tls_version': self._state['tls_version'],
+            'cipher_suite': self._state['cipher_suite'],
+            'metadata': self._metadata
+        }
+
+    def reset(self) -> None:
+        """Reset state to initial values."""
+        self._state = {
+            'handshake_complete': False,
+            'client_hello_received': False,
+            'server_hello_received': False,
+            'is_client_side': True,
+            'tls_version': None,
+            'cipher_suite': None,
+            'start_time': datetime.utcnow(),
+            'last_activity': datetime.utcnow(),
+            'bytes_sent': 0,
+            'bytes_received': 0,
+            'requests_processed': 0,
+            'responses_processed': 0
+        }
+        self._metadata.clear()
 
     async def register_connection(self, protocol_type: str = "https") -> None:
         """Register connection with state tracking.

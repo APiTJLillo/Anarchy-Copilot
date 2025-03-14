@@ -9,12 +9,33 @@ from sqlalchemy import text
 
 from database import AsyncSessionLocal
 from api.proxy.database_models import ProxyHistoryEntry
-from proxy.server.tls.context import TlsContextFactory
+from proxy.core.tls import get_tls_context, CertificateManager
 from ..tls.connection_manager import connection_mgr
-from proxy.interceptors.database import DatabaseInterceptor
-from proxy.interceptor import InterceptedRequest, InterceptedResponse
+from proxy.interceptor import InterceptedRequest, InterceptedResponse, ProxyInterceptor
 
 logger = logging.getLogger("proxy.core")
+
+class ProxyResponse:
+    """Represents an HTTP response from the proxy server."""
+    
+    def __init__(self, status_code: int = 200, headers: Dict[str, str] = None, body: bytes = None):
+        self.status_code = status_code
+        self.headers = headers or {}
+        self.body = body or b""
+        
+    def to_h11(self) -> Tuple[h11.Response, h11.Data, h11.EndOfMessage]:
+        """Convert to h11 events for sending."""
+        headers = [(k.encode(), v.encode()) for k, v in self.headers.items()]
+        if self.body and b"content-length" not in [k.lower() for k, _ in headers]:
+            headers.append((b"content-length", str(len(self.body)).encode()))
+            
+        response = h11.Response(status_code=self.status_code, headers=headers)
+        data = h11.Data(data=self.body) if self.body else None
+        endofmessage = h11.EndOfMessage()
+        
+        if data:
+            return response, data, endofmessage
+        return response, endofmessage
 
 class HttpRequestHandler:
     """Handles HTTP requests and responses during HTTPS interception."""
@@ -31,25 +52,27 @@ class HttpRequestHandler:
         self._current_response_body = bytearray()
         self._current_request_start_time: Optional[datetime] = None
         self._history_entry_id: Optional[int] = None
-        self._database_interceptor = None  # Will be initialized in _ensure_interceptor
+        self._interceptor = None  # Will be initialized in _ensure_interceptor
         self._current_intercepted_request: Optional[InterceptedRequest] = None
 
     async def _ensure_interceptor(self) -> None:
-        """Ensure database interceptor is initialized."""
-        if not self._database_interceptor:
-            logger.debug(f"[{self.connection_id}] Initializing database interceptor")
-            self._database_interceptor = DatabaseInterceptor(self.connection_id)
+        """Ensure interceptor is initialized."""
+        if not self._interceptor:
+            logger.debug(f"[{self.connection_id}] Initializing interceptor")
+            # Get the first registered interceptor
+            interceptor_cls = next(iter(ProxyInterceptor._registry))
+            self._interceptor = interceptor_cls(self.connection_id)
             # Test the interceptor
             try:
-                await self._database_interceptor._ensure_db()
-                session_id = await self._database_interceptor._get_active_session()
+                await self._interceptor._ensure_db()
+                session_id = await self._interceptor._get_active_session()
                 if session_id:
-                    logger.info(f"[{self.connection_id}] Database interceptor initialized with session {session_id}")
+                    logger.info(f"[{self.connection_id}] Interceptor initialized with session {session_id}")
                 else:
-                    logger.warning(f"[{self.connection_id}] No active session found for database interceptor")
+                    logger.warning(f"[{self.connection_id}] No active session found for interceptor")
             except Exception as e:
-                logger.error(f"[{self.connection_id}] Failed to initialize database interceptor: {e}")
-                self._database_interceptor = None
+                logger.error(f"[{self.connection_id}] Failed to initialize interceptor: {e}")
+                self._interceptor = None
                 raise
 
     async def handle_client_data(self, data: bytes) -> Optional[bytes]:
@@ -112,7 +135,7 @@ class HttpRequestHandler:
             "request_headers": dict(event.headers),
             "request_body": bytearray(),
             "is_modified": False,
-            "tls_info": TlsContextFactory.get_connection_info(None)  # Will be updated later
+            "tls_info": get_tls_context(None)  # Will be updated later
         }
         self._current_request_body.clear()
         
@@ -131,11 +154,11 @@ class HttpRequestHandler:
         # Store the request body
         self._current_request["request_body"] = bytes(self._current_request_body)
         
-        # Ensure database interceptor is initialized
+        # Ensure interceptor is initialized
         try:
             await self._ensure_interceptor()
         except Exception as e:
-            logger.error(f"[{self.connection_id}] Failed to ensure database interceptor: {e}")
+            logger.error(f"[{self.connection_id}] Failed to ensure interceptor: {e}")
             return
         
         # Create intercepted request
@@ -147,13 +170,13 @@ class HttpRequestHandler:
             connection_id=self.connection_id
         )
         
-        # Let database interceptor process request
+        # Let interceptor process request
         try:
-            if self._database_interceptor:
-                await self._database_interceptor.intercept(self._current_intercepted_request)
+            if self._interceptor:
+                await self._interceptor.intercept(self._current_intercepted_request)
                 logger.debug(f"[{self.connection_id}] Successfully intercepted request")
             else:
-                logger.warning(f"[{self.connection_id}] No database interceptor available for request")
+                logger.warning(f"[{self.connection_id}] No interceptor available for request")
         except Exception as e:
             logger.error(f"[{self.connection_id}] Failed to intercept request: {e}", exc_info=True)
 
@@ -184,13 +207,13 @@ class HttpRequestHandler:
                 connection_id=self.connection_id
             )
             
-            # Let database interceptor process response
+            # Let interceptor process response
             try:
-                if self._database_interceptor:
-                    await self._database_interceptor.intercept(intercepted_response, self._current_intercepted_request)
+                if self._interceptor:
+                    await self._interceptor.intercept(intercepted_response, self._current_intercepted_request)
                     logger.debug(f"[{self.connection_id}] Successfully intercepted response")
                 else:
-                    logger.warning(f"[{self.connection_id}] No database interceptor available for response")
+                    logger.warning(f"[{self.connection_id}] No interceptor available for response")
             except Exception as e:
                 logger.error(f"[{self.connection_id}] Failed to intercept response: {e}", exc_info=True)
         
@@ -208,8 +231,8 @@ class HttpRequestHandler:
         self._current_request_body.clear()
         self._current_response_body.clear()
         self._current_intercepted_request = None
-        if self._database_interceptor:
-            asyncio.create_task(self._database_interceptor.close())
+        if self._interceptor:
+            asyncio.create_task(self._interceptor.close())
 
     async def handle_request(self, request) -> None:
         """Handle a Request object directly."""

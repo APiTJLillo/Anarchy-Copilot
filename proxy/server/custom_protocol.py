@@ -4,12 +4,14 @@ import errno
 import logging
 import socket
 import time
-import weakref
 from datetime import datetime, timezone
 from typing import Optional, Tuple, Any, Set, Dict, List
 from urllib.parse import unquote
 from uuid import uuid4
 from async_timeout import timeout
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import sessionmaker
+from database import engine
 
 from uvicorn.protocols.http.h11_impl import H11Protocol as BaseH11Protocol
 from sqlalchemy import text, select
@@ -30,31 +32,100 @@ def log_connection(conn_id: str, message: str) -> None:
     """Helper for consistent connection logging."""
     logger.debug(f"[Connection {conn_id}] {message}")
 
-class H11Protocol(BaseH11Protocol):
+class H11Protocol:
     """Custom H11Protocol that supports async data_received."""
     
-    async def data_received(self, data: bytes) -> None:
-        """Handle incoming data asynchronously."""
+    def __init__(self, connection_id: Optional[str] = None, config=None, server=None):
+        """Initialize H11Protocol with required parameters."""
+        logger.debug("Initializing H11Protocol")
+        logger.debug(f"H11Protocol params - connection_id: {connection_id}, has_config: {config is not None}, has_server: {server is not None}")
+        
+        self.connection_id = connection_id or str(uuid4())
+        self.conn = h11.Connection(h11.SERVER)
+        self.transport = None
+        self.flow = None
+        self.server = server
+        self.client = None
+        self.scheme = None
+        self.scope = None
+        self.headers = None
+        self.config = config
+        logger.debug("H11Protocol initialization completed")
+    
+    def _send_error_response(self, status_code: int, message: str) -> None:
+        """Send an error response."""
         try:
-            if self.conn.their_state in {h11.DONE, h11.MUST_CLOSE, h11.CLOSED}:
+            if not self.transport or self.transport.is_closing():
                 return
+                
+            # Reset connection state if needed
+            if self.conn.our_state in {h11.ERROR}:
+                self.conn = h11.Connection(h11.SERVER)
+                
+            response = h11.Response(
+                status_code=status_code,
+                headers=[
+                    (b"content-type", b"text/plain; charset=utf-8"),
+                    (b"connection", b"close"),
+                ],
+                reason=message.encode()
+            )
             
-            self.conn.receive_data(data)
+            try:
+                self.transport.write(self.conn.send(response))
+                self.transport.write(self.conn.send(h11.EndOfMessage()))
+            except h11._util.LocalProtocolError:
+                # If we can't send the error response, just close the connection
+                pass
+                
+            self.transport.close()
             
-            while True:
-                event = self.conn.next_event()
-                if event is h11.NEED_DATA:
-                    break
-                elif isinstance(event, h11.Request):
-                    await self.handle_request(event)
-                elif isinstance(event, h11.Data):
-                    await self.handle_body(event.data)
-                elif isinstance(event, h11.EndOfMessage):
-                    await self.handle_endofmessage(event)
-        except Exception as exc:
-            msg = "Invalid HTTP request received."
-            self._send_error_response(400, msg)
-            logger.warning(msg, exc_info=True)
+        except Exception as e:
+            logger.error(f"[{self.connection_id}] Error sending error response: {e}")
+            if self.transport and not self.transport.is_closing():
+                self.transport.close()
+
+    async def data_received(self, data: bytes) -> None:
+        """Handle incoming data."""
+        try:
+            # If in tunnel mode, forward data directly
+            if self._in_tunnel_mode:
+                if self._remote_transport and not self._remote_transport.is_closing():
+                    self._remote_transport.write(data)
+                    await self._record_event("data", "browser-proxy", "success", len(data))
+                return
+
+            # Otherwise handle as HTTP
+            try:
+                if self.conn.their_state in {h11.DONE, h11.MUST_CLOSE, h11.CLOSED}:
+                    self.conn = h11.Connection(h11.SERVER)
+                    
+                self.conn.receive_data(data)
+                
+                while True:
+                    event = self.conn.next_event()
+                    if event is h11.NEED_DATA:
+                        break
+                    elif isinstance(event, h11.Request):
+                        await self.handle_request(event)
+                    elif isinstance(event, h11.Data):
+                        await self.handle_body(event.data)
+                    elif isinstance(event, h11.EndOfMessage):
+                        await self.handle_endofmessage(event)
+                        
+            except h11._util.RemoteProtocolError as e:
+                msg = "Invalid HTTP request received"
+                self._send_error_response(400, msg)
+                logger.warning(f"[{self.connection_id}] {msg}: {e}")
+            except Exception as e:
+                msg = "Error processing request"
+                self._send_error_response(500, str(e))
+                logger.error(f"[{self.connection_id}] {msg}: {e}", exc_info=True)
+            
+        except Exception as e:
+            logger.error(f"[{self.connection_id}] Unhandled error: {e}", exc_info=True)
+            if self.transport and not self.transport.is_closing():
+                self.transport.close()
 
     async def handle_request(self, event: h11.Request) -> None:
         """Handle an HTTP request event."""
@@ -122,28 +193,84 @@ class H11Protocol(BaseH11Protocol):
 class TunnelProtocol(H11Protocol):
     """Custom protocol handler for HTTPS tunneling."""
     
-    def _send_error(self, status_code: int, reason: str) -> None:
-        """Send an HTTP error response to the client."""
-        try:
-            if self.transport and not self.transport.is_closing():
-                error_response = (
-                    f"HTTP/1.1 {status_code} {reason}\r\n"
-                    f"Connection: close\r\n"
-                    f"Content-Type: text/plain\r\n"
-                    f"Content-Length: {len(reason)}\r\n"
-                    f"\r\n"
-                    f"{reason}"
-                ).encode()
-                self.transport.write(error_response)
-                log_connection(self._connection_id, f"Sent error response: {status_code} {reason}")
-        except Exception as e:
-            logger.error(f"[{self._connection_id}] Failed to send error response: {e}")
-
-    # Class-level connection tracking
-    _active_connections: Dict[str, Dict[str, Any]] = {}
+    _active_connections: Dict[str, Dict[str, Any]] = {}  # Class variable to track active connections
     
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self, connection_id: Optional[str] = None, client_transport: Any = None, flow_control: Any = None,
+                 interceptor_class: Optional[Any] = None, buffer_size: int = 262144, 
+                 metrics_interval: float = 0.1, write_limit: int = 1048576, 
+                 write_interval: float = 0.0001):
+        """Initialize tunnel protocol."""
+        logger.debug("Initializing TunnelProtocol")
+        logger.debug(f"TunnelProtocol params - connection_id: {connection_id}, has_client_transport: {client_transport is not None}")
+        
+        try:
+            self._connection_id = connection_id or str(uuid4())
+            logger.debug(f"Generated connection_id: {self._connection_id}")
+            
+            # Initialize base class without uvicorn dependencies
+            super().__init__(connection_id=self._connection_id)
+            logger.debug("H11Protocol.__init__ completed")
+            
+        except Exception as e:
+            logger.error(f"Error in TunnelProtocol initialization: {e}", exc_info=True)
+            raise
+            
+        self._transport = None
+        self._client_transport = client_transport
+        self._flow_control = flow_control
+        self._interceptor_class = interceptor_class
+        self._interceptor = None
+        self._buffer_size = buffer_size
+        self._metrics_interval = metrics_interval
+        self._write_limit = write_limit
+        self._write_interval = write_interval
+        self._write_queue = asyncio.Queue()
+        self._write_task = None
+        self._monitor_task = None
+        self._bytes_sent = 0
+        self._bytes_received = 0
+        self._requests_processed = 0
+        self._last_activity = time.time()
+        self._tunnel_start_time = None
+        self._tunnel_end_time = None
+        self._in_tunnel_mode = False
+        self._last_request = None  # Store the last request for matching with response
+        
+        # Transfer settings
+        self._write_limit = write_limit
+        self._write_interval = write_interval
+        self._last_write = 0.0
+        
+        # Statistics and state tracking
+        self._write_queue = asyncio.Queue(maxsize=100)  # Increased queue size
+        self._write_task = None
+        self._write_lock = asyncio.Lock()
+        self._buffer_stats = {
+            "current_size": 0,
+            "peak_size": 0,
+            "total_processed": 0,
+            "chunks_processed": 0,
+            "write_count": 0,
+            "write_rate": 0,
+            "avg_chunk_size": 0
+        }
+        self._last_metrics_update = 0
+        self._pending_updates = {}
+        
+        # Rate limiting state
+        self._write_permits = asyncio.Semaphore(10)  # Increased concurrent writes
+        
+        # Database integration
+        self.session_maker = sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+        self._db: Optional[AsyncSession] = None
+        
+        # Register state
+        asyncio.create_task(self._update_metrics("initialized"))
+        
+        # Add timeout counter
+        self._write_timeouts = 0
+        self._max_queue_size = 2000  # Increased queue size limit
+        
         self._tunnel_tasks: Set[asyncio.Task] = set()
         self._remote_transport = None
         self._remote_protocol = None
@@ -152,22 +279,50 @@ class TunnelProtocol(H11Protocol):
         self._connect_headers: Dict[str, str] = {}
         self._host: Optional[str] = None
         self._port: Optional[int] = None
-        self._in_tunnel_mode = False
         self._tunnel_buffer = bytearray()
         self._buffer = bytearray()  # Buffer for TLS handshake data
         self._connect_response_sent = False
-        self.flow_control = None
         
         # Connection tracking initialization
-        self._connection_id = str(uuid4())
-        self._bytes_received = 0
-        self._bytes_sent = 0
-        self._requests_processed = 0
         self._events: List[Dict[str, Any]] = []
         self._event_queue: asyncio.Queue[Dict[str, Any]] = asyncio.Queue()
         self._event_processor = None
+        self._stall_timeout = 10.0  # 10 seconds stall detection
+        self._monitor_task = None
+
+        # Register connection in active connections
+        self._active_connections[self._connection_id] = {
+            "id": self._connection_id,
+            "start_time": datetime.now(timezone.utc).timestamp(),
+            "bytes_sent": 0,
+            "bytes_received": 0,
+            "events": [],
+            "status": "initialized"
+        }
 
         log_connection(self._connection_id, "Protocol initialized")
+
+    async def process_client_data(self, data: bytes) -> bytes:
+        """Process data from client to target."""
+        if not self._in_tunnel_mode:
+            self._in_tunnel_mode = True
+            self._tunnel_start_time = datetime.now(timezone.utc)
+            await self._record_event("tunnel_start", "client->target", "success")
+        
+        self._bytes_sent += len(data)
+        await self._record_event("data", "client->target", "success", len(data))
+        return data
+
+    async def process_target_data(self, data: bytes) -> bytes:
+        """Process data from target to client."""
+        if not self._in_tunnel_mode:
+            self._in_tunnel_mode = True
+            self._tunnel_start_time = datetime.now(timezone.utc)
+            await self._record_event("tunnel_start", "target->client", "success")
+        
+        self._bytes_received += len(data)
+        await self._record_event("data", "target->client", "success", len(data))
+        return data
 
     async def _record_event(self, event_type: str, direction: str, status: str, bytes_transferred: Optional[int] = None) -> None:
         """Record an event to both memory and WebSocket broadcast."""
@@ -294,25 +449,6 @@ class TunnelProtocol(H11Protocol):
             # Update state on error
             await proxy_state.update_connection(self._connection_id, "error", str(e))
 
-    async def data_received(self, data: bytes) -> None:
-        """Handle incoming data."""
-        try:
-            # If in tunnel mode, forward data directly
-            if self._in_tunnel_mode:
-                if self._remote_transport and not self._remote_transport.is_closing():
-                    self._remote_transport.write(data)
-                    await self._record_event("data", "browser-proxy", "success", len(data))
-                return
-
-            # Otherwise handle as HTTP
-            await super().data_received(data)
-            
-        except Exception as exc:
-            if not self._in_tunnel_mode:
-                msg = "Invalid HTTP request received."
-                self._send_error_response(400, msg)
-                logger.warning(msg, exc_info=True)
-
     def set_tunnel_mode(self, enabled: bool = True) -> None:
         """Set protocol to tunnel mode after CONNECT is established."""
         self._in_tunnel_mode = enabled
@@ -322,126 +458,93 @@ class TunnelProtocol(H11Protocol):
             logger.debug(f"[{self._connection_id}] Switched to tunnel mode")
 
     async def handle_request(self, request: h11.Request) -> None:
-        """Override request handling to intercept and modify requests."""
-        # Handle CONNECT method
-        if request.method == b"CONNECT":
-            try:
+        """Handle an HTTP request event."""
+        try:
+            if request.method == b"CONNECT":
                 target = request.target.decode()
-                log_connection(self._connection_id, f"Handling CONNECT request: {target}")
-                host, port = self._parse_authority(target)
-                self._host = host
-                self._port = port
+                logger.debug(f"[{self._connection_id}] Handling CONNECT request for {target}")
                 
-                # Update connection info
-                if self._connection_id in self._active_connections:
-                    self._active_connections[self._connection_id].update({
-                        "host": host,
-                        "port": port
-                    })
-                
-                # Only handle CONNECT if we're not in HTTPS intercept mode
-                if not hasattr(self, '_intercept_enabled'):
-                    log_connection(self._connection_id, f"Establishing tunnel to {host}:{port}")
+                try:
+                    host, port = self._parse_authority(target)
+                    self._host = host
+                    self._port = port
+                    
+                    # Update connection info
+                    if self._connection_id in self._active_connections:
+                        self._active_connections[self._connection_id].update({
+                            "host": host,
+                            "port": port,
+                            "status": "connecting"
+                        })
+                    
                     await self._handle_connect(host, port)
-                else:
-                    # Let the parent class handle HTTPS interception
-                    await super().handle_request(request)
+                    
+                except Exception as e:
+                    logger.error(f"[{self._connection_id}] CONNECT error: {e}", exc_info=True)
+                    self._send_error_response(502, str(e))
+            else:
+                await super().handle_request(request)
                 
-            except asyncio.CancelledError:
-                log_connection(self._connection_id, "CONNECT tunnel cancelled")
-                asyncio.create_task(self._record_event("connection", "browser-proxy", "cancelled"))
-                self.transport.close()
-            except Exception as e:
-                log_connection(self._connection_id, f"Failed to handle CONNECT: {e}")
-                asyncio.create_task(self._record_event("connection", "browser-proxy", "error"))
-                self._send_error(502, str(e))
-        else:
-            # Handle non-CONNECT requests
-            await super().handle_request(request)
+        except Exception as e:
+            logger.error(f"[{self._connection_id}] Request error: {e}", exc_info=True)
+            self._send_error_response(500, str(e))
 
     async def _handle_connect(self, host: str, port: int) -> None:
-        """Handle CONNECT request by establishing a tunnel."""
+        """Handle CONNECT tunnel requests."""
         try:
             # Record connection attempt
-            asyncio.create_task(self._record_event("request", "browser-proxy", "pending"))
+            await self._update_metrics("connecting")
             
-            log_connection(self._connection_id, f"Attempting connection to {host}:{port}")
+            logger.debug(f"[{self._connection_id}] Attempting connection to {host}:{port}")
             loop = asyncio.get_event_loop()
 
+            # Create remote connection with retries
+            for attempt in range(3):
+                try:
+                    async with timeout(10) as cm:
+                        transport, protocol = await loop.create_connection(
+                            lambda: TunnelTransport(
+                                client_transport=self.transport,
+                                connection_id=self._connection_id
+                            ),
+                            host=host,
+                            port=port
+                        )
+                        break
+                except (ConnectionRefusedError, asyncio.TimeoutError) as e:
+                    if attempt == 2:
+                        raise
+                    await asyncio.sleep(0.5 * (attempt + 1))
+                    continue
+                    
+            logger.debug(f"[{self._connection_id}] Remote connection established")
+            
             # Send 200 Connection Established
-            log_connection(self._connection_id, "Sending 200 Connection Established")
-            response = (
-                b"HTTP/1.1 200 Connection Established\r\n"
-                b"Connection: keep-alive\r\n"
-                b"\r\n"
-            )
+            if self.transport and not self.transport.is_closing():
+                self.transport.write(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                
+            # Update state
+            await self._update_metrics("connected")
             
-            try:
-                # Send response with timeout protection
-                async with timeout(5) as cm:
-                    if self.transport and not self.transport.is_closing():
-                        self.transport.write(response)
-                        self._connect_response_sent = True  # Mark response as sent
-                        await asyncio.sleep(0.1)  # Brief pause to ensure response is sent
-            except asyncio.TimeoutError:
-                logger.error(f"[{self._connection_id}] Timeout sending 200 response")
-                raise
-                
-            # Record response sent
-            asyncio.create_task(self._record_event("response", "proxy-browser", "success"))
+            # Switch to tunnel mode
+            self.set_tunnel_mode(True)
             
-            try:
-                # Create the remote connection with retries
-                for attempt in range(3):
-                    try:
-                        async with timeout(10) as cm:
-                            self._remote_transport, self._remote_protocol = await loop.create_connection(
-                                lambda: TunnelTransport(
-                                    client_transport=self.transport,
-                                    connection_id=self._connection_id,
-                                    write_buffer_size=256 * 1024  # 256KB buffer
-                                ),
-                                host=host,
-                                port=port
-                            )
-                            break
-                    except (ConnectionRefusedError, asyncio.TimeoutError) as e:
-                        if attempt == 2:
-                            raise
-                        await asyncio.sleep(0.5 * (attempt + 1))
-                        continue
-                        
-                log_connection(self._connection_id, f"Remote transport created with ID {id(self._remote_transport)}")
-                
-                # Record successful connection
-                asyncio.create_task(self._record_event("request", "proxy-web", "success"))
-
-                # Record HTTPS connection in proxy history
-                self._tunnel_start_time = datetime.utcnow()
-                await self._create_history_entry(host, port)
-
-                # Switch to tunnel mode
-                log_connection(self._connection_id, "Switching to tunnel mode")
-                self._in_tunnel_mode = True
-                self.set_tunnel_mode(True)  # Important: This resets the HTTP state
-                
-                # Process any buffered data
-                if self._tunnel_buffer:
-                    log_connection(self._connection_id, f"Processing {len(self._tunnel_buffer)} bytes of buffered data")
-                    if self._remote_transport and not self._remote_transport.is_closing():
-                        self._remote_transport.write(bytes(self._tunnel_buffer))
-                    self._tunnel_buffer.clear()
-
-            except Exception as e:
-                log_connection(self._connection_id, f"Remote connection failed: {str(e)}")
-                raise
-
+            # Store remote transport
+            self._remote_transport = transport
+            
         except Exception as e:
-            log_connection(self._connection_id, f"Tunnel error: {e}")
-            asyncio.create_task(self._record_event("connection", "proxy-web", "error"))
-            self._send_error(502, str(e))
+            logger.error(f"[{self._connection_id}] Tunnel error: {e}", exc_info=True)
+            self._send_error_response(502, str(e))
             if self._remote_transport and not self._remote_transport.is_closing():
                 self._remote_transport.close()
+
+    def set_tunnel_mode(self, enabled: bool = True) -> None:
+        """Set protocol to tunnel mode after CONNECT is established."""
+        self._in_tunnel_mode = enabled
+        if enabled:
+            # Reset HTTP state
+            self.conn = h11.Connection(h11.SERVER)
+            logger.debug(f"[{self._connection_id}] Switched to tunnel mode")
 
     async def _create_history_entry(self, host: str, port: int) -> None:
         """Create a history entry for this connection."""
@@ -616,12 +719,34 @@ class TunnelProtocol(H11Protocol):
             # Final cleanup
             self._active_connections.pop(self._connection_id, None)
 
+    async def _update_metrics(self, status: str) -> None:
+        """Update connection metrics."""
+        try:
+            if self._connection_id in self._active_connections:
+                self._active_connections[self._connection_id].update({
+                    "status": status,
+                    "last_update": datetime.now(timezone.utc).timestamp()
+                })
+                
+                # Broadcast update if WebSocket manager is available
+                try:
+                    from api.proxy.websocket import connection_manager
+                    if connection_manager:
+                        await connection_manager.broadcast_connection_update(
+                            self._active_connections[self._connection_id]
+                        )
+                except Exception as e:
+                    logger.error(f"Failed to broadcast metrics update: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Error updating metrics: {e}")
+
 class TunnelTransport(asyncio.Protocol):
     """Protocol for tunnel connection."""
     
-    def __init__(self, client_transport, connection_id: str, write_buffer_size: int = 256 * 1024):
+    def __init__(self, client_transport, connection_id: Optional[str] = None, write_buffer_size: int = 256 * 1024):
         self.client_transport = client_transport
-        self.connection_id = connection_id
+        self.connection_id = connection_id or str(uuid4())  # Generate a new ID if not provided
         self.transport = None
         self._write_buffer_size = write_buffer_size
         self._current_buffer_size = 0
@@ -645,7 +770,7 @@ class TunnelTransport(asyncio.Protocol):
         self._handshake_start_time = None
         self._bytes_forwarded = 0
 
-        log_connection(connection_id, f"TunnelTransport initialized with buffer size {write_buffer_size}")
+        log_connection(self.connection_id, f"TunnelTransport initialized with buffer size {write_buffer_size}")
 
     def connection_made(self, transport: asyncio.Transport) -> None:
         """Handle new connection."""

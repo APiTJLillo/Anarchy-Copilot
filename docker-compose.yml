@@ -32,22 +32,15 @@ services:
       - ANARCHY_API_VERSION=0.1.0
       - ANARCHY_DEBUG=true
       - ANARCHY_CORS_ORIGINS=http://localhost:3000,ws://localhost:3000,http://localhost:8000,ws://localhost:8000
-      # Proxy Settings
-      - ANARCHY_PROXY_HOST=0.0.0.0
+      # Proxy Settings (only for client configuration)
+      - ANARCHY_PROXY_HOST=proxy
       - ANARCHY_PROXY_PORT=8083
-      - ANARCHY_PROXY_INTERCEPT_REQUESTS=true
-      - ANARCHY_PROXY_INTERCEPT_RESPONSES=true
-      - ANARCHY_PROXY_MAX_CONNECTIONS=100
-      - ANARCHY_PROXY_MAX_KEEPALIVE_CONNECTIONS=20
-      - ANARCHY_PROXY_KEEPALIVE_TIMEOUT=30
-      - CA_CERT_PATH=/app/certs/ca.crt
-      - CA_KEY_PATH=/app/certs/ca.key
     env_file:
       - .env
-    entrypoint: [ "/usr/local/bin/dev-entrypoint.sh" ]
+    entrypoint: [ "/usr/local/bin/api-entrypoint.sh" ]
     command: [ "start" ]
     healthcheck:
-      test: [ "CMD", "/usr/local/bin/healthcheck.sh" ]
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/api/health" ]
       interval: 5s
       timeout: 10s
       retries: 5
@@ -57,7 +50,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dev
-    command: start
+    entrypoint: [ "/usr/local/bin/proxy-entrypoint.sh" ]
+    command: [ "start" ]
     volumes:
       - .:/app
       - dev-cache:/root/.cache
@@ -68,7 +62,7 @@ services:
         source: ./data
         target: /app/data
     ports:
-      - "8083:8083"
+      - "8083:8083" # Proxy port
       - "5678:5678" # Debug port
     environment:
       - PYTHONPATH=/app
@@ -87,10 +81,11 @@ services:
       - ANARCHY_PROXY_MAX_KEEPALIVE_CONNECTIONS=20
       - ANARCHY_PROXY_KEEPALIVE_TIMEOUT=30
     healthcheck:
-      test: [ "CMD", "/usr/local/bin/healthcheck.sh" ]
-      interval: 10s
+      test: [ "CMD", "curl", "-f", "http://dev:8000/api/proxy/health" ]
+      interval: 30s
       timeout: 5s
       retries: 3
+      start_period: 10s
 
   frontend:
     build:
@@ -109,6 +104,7 @@ services:
       - NODE_ENV=development
       - REACT_APP_API_BASE_URL=http://localhost:8000
       - REACT_APP_PROXY_URL=http://localhost:8083
+      - REACT_APP_WS_URL=ws://localhost:8000
       - PORT=3000 # Set explicit port for React dev server
       - WDS_SOCKET_PORT=3000
     depends_on:

@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     api_version: str = "0.1.0"
     debug: bool = False
     cors_origins_input: str = Field(
-        default="http://localhost:3000",
+        default="http://localhost:3000,ws://localhost:3000,http://localhost:8000,ws://localhost:8000",
         description="Comma-separated list of allowed CORS origins",
         alias="cors_origins",
     )
@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     def cors_origins(self) -> List[str]:
         """Parse CORS origins from comma-separated string."""
         if not self.cors_origins_input:
-            return ["http://localhost:3000"]
+            return ["http://localhost:3000", "ws://localhost:3000", "http://localhost:8000", "ws://localhost:8000"]
         return [
             origin.strip() 
             for origin in self.cors_origins_input.split(",") 

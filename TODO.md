@@ -26,6 +26,7 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
 ## Phase 1: Project Setup & Architecture
 
 1. **Define Project Vision & Scope** (Completed)
+
    - **Project Description**: Anarchy Copilot is an open-source, comprehensive bug bounty suite designed to empower security researchers and bug bounty hunters with advanced tools and features. Inspired by Burp Suite, it integrates modern technologies such as Large Language Models (LLMs) and a visual coding interface to streamline the bug bounty process.
    - **Goals**: Support all stages of bug bounty hunting, from reconnaissance to vulnerability discovery and reporting, while maintaining a modular architecture for easy customization and extension through plugins.
    - **Target Audience**: Security researchers, bug bounty hunters, and organizations involved in vulnerability management.
@@ -33,10 +34,12 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
    - **Ethical and Legal Alignment**: Ensure compliance with ethical hacking standards and legal requirements, promoting responsible disclosure and data privacy.
 
 2. **Repository & License Setup** (Completed)
+
    - Create the GitHub repository.
    - Choose and apply an open-source license (e.g., MIT, GPLv3, Apache) that aligns with your monetization strategy.
 
 3. **Technology Stack Decisions** (Completed)
+
    - **Backend**: Use Python with FastAPI for high-performance APIs and ease of integration with AI and data science libraries.
    - **Frontend**: Use React with TypeScript for building interactive and maintainable user interfaces.
    - **Cross-Platform Desktop App**: Consider Electron for rapid development or Tauri for a lightweight alternative.
@@ -44,6 +47,7 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
    - **Mobile Support**: Implement a responsive web design initially, with the option to develop a React Native app if needed.
 
 4. **High-Level Architecture & Project Structure** (Completed)
+
    - **Folder Structure**: Organize the project into the following directories:
      - `core`: Core logic and shared utilities.
      - `ai_module`: AI-related functionalities and enhancements.
@@ -65,6 +69,7 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
 ## Phase 2: Data Model & Core Database
 
 1. **Design Data Schemas** (Completed)
+
    - **Projects**: Name, scope details, owners, etc.
    - **Recon Results**: Domains, subdomains, IPs, etc.
    - **Vulnerabilities**: Vulnerability type, severity, status, assigned user, etc.
@@ -72,6 +77,7 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
    - **User & RBAC**: Structures for multi-user support (if applicable).
 
 2. **Implement ORM Models & Migrations** (Completed)
+
    - Create models using your chosen framework. (Completed)
    - Set up migrations to evolve the schema. (Completed)
    - Ensure proper relationships (e.g., one project → many vulnerabilities). (Completed)
@@ -82,6 +88,7 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
    - Update imports across codebase to use new model structure (Completed)
 
 3. **Basic CRUD & API Endpoints** (Completed)
+
    - Implement endpoints to create, read, update, and delete records (for Projects, Vulnerabilities, Recon data). (Projects Completed)
    - Integrate basic user authentication. (Completed)
 
@@ -94,6 +101,7 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
 ## Phase 3: Reconnaissance Module
 
 1. **Integrate Recon Tools** (Completed)
+
    - Created install_recon_tools.py to automate tool installation
    - Integrated subdomain discovery tools (Amass, Subfinder, DNSx, Assetfinder)
    - Added port scanning (Masscan, Nmap)
@@ -104,6 +112,7 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
    - Created Python wrappers for tool execution and output parsing
 
 2. **Continuous Monitoring & Scheduling** (Completed)
+
    - Added scheduled recon tasks support with configurable intervals
    - Implemented change tracking between scan runs
    - Added automated comparisons of scan results for:
@@ -115,6 +124,7 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
    - Added scheduler controls (start, stop, update, remove)
 
 3. **Recon Dashboard** (Completed)
+
    - Developed comprehensive frontend view with multiple tool-specific displays:
      - Subdomain enumeration results with categorization
      - Port scan results with service detection
@@ -126,6 +136,7 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
    - Implemented real-time progress tracking
 
 4. **AI-Assisted Recon (Basic)** (Completed)
+
    - Implemented comprehensive heuristic engine to flag anomalies and high-value targets
    - Enhanced analyze_recon_data with advanced pattern detection:
      - Sensitive subdomain pattern detection (admin, dev, internal, etc.)
@@ -137,6 +148,7 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
    - Results include detailed metadata with flag reasons and timestamps
 
 5. **User Controls & Scope Definition** (Completed)
+
    - Implemented scope validation to prevent scanning of forbidden domains (.gov, .mil, etc.)
    - Added domain input validation and error handling
    - Added progress indicators and status updates
@@ -155,6 +167,7 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
 ## Phase 4: Vulnerability Discovery Module
 
 1. **Integrated Scanning Platform** (In Progress)
+
    - ✓ Integrate Nuclei as primary scanning engine
      - ✓ Basic scanner implementation
      - ✓ Configuration validation and management
@@ -173,6 +186,7 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
    - Advanced logging and audit trails
 
 2. **Proxy Core Development** (In Progress)
+
    - Design modular proxy architecture:
      - ✓ Core proxy engine with protocol support
      - ✓ Basic plugin system for request/response processors
@@ -196,7 +210,9 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
        - ✓ Content-Length verification
      - ✓ View proxy history while proxy is stopped
      - ✓ Navigate between requests in history
-     - ✓ Detailed request/response inspection
+     - ✓ Detailed request/response inspection with decrypted content display
+     - ✓ Header-based user management integration
+     - ✓ Header-based project selection integration
      - In Progress:
        - Add ability to edit a request and resend it
        - Add a fuzzer with the ability to load lists into the fuzzer and store them in the database as separate lists for separate circumstances
@@ -223,6 +239,7 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
      - Concurrent connection handling
 
 3. **Enhanced Fuzzing & Testing**
+
    - Implement intelligent fuzzing:
      - AI-driven parameter mutation
      - Context-aware payload generation
@@ -238,6 +255,7 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
      - Payload effectiveness analysis
 
 4. **Advanced Analysis Features**
+
    - Implement automated analysis:
      - JavaScript deobfuscation
      - API endpoint discovery
@@ -253,6 +271,7 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
      - Risk scoring and prioritization
 
 5. **False Positive Management**
+
    - Develop comprehensive false positive handling:
      - ML-based classification
      - Historical context analysis
@@ -267,6 +286,7 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
      - Finding correlation
 
 6. **Integration Hub**
+
    - Create centralized tool management:
      - Tool configuration profiles
      - Resource allocation controls
@@ -281,6 +301,7 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
      - Result aggregation
 
 7. **Real-time Dashboard**
+
    - Build comprehensive monitoring:
      - Active scan status
      - Resource utilization
@@ -313,22 +334,27 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
 ## Phase 5: Exploitation Module
 
 1. **Exploitation Toolkit Integration**
+
    - Decide on integrating with exploitation frameworks (e.g., Metasploit).
    - Provide a controlled environment for running exploits.
 
 2. **Semi-Automated Exploit Execution**
+
    - Enable users to view potential exploits with suggested parameters.
    - Allow a controlled “Execute” option with detailed logging.
 
 3. **AI-Assisted Exploit Guidance**
+
    - Offer AI recommendations for chaining exploits or escalation paths.
    - Display guidance in the UI for exploitation next steps.
 
 4. **Scope & Safety Checks**
+
    - Enforce strict scope boundaries for exploit attempts.
    - Require user confirmations and display disclaimers before executing risky actions.
 
 5. **Logging**
+
    - Record detailed logs for all exploit attempts (including timestamps, user actions, and outcomes).
 
 6. **Testing**
@@ -339,14 +365,17 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
 ## Phase 6: Reporting Module
 
 1. **Report Data Model & Storage**
+
    - Define how reports are generated and linked to vulnerabilities.
    - Store report drafts and finalized versions.
 
 2. **Report Templates**
+
    - Create multiple templates (e.g., technical, executive summary).
    - Support output formats such as Markdown, PDF, and HTML.
 
 3. **AI-Generated Draft Reports**
+
    - Integrate an LLM (e.g., GPT-4) to generate:
      - Vulnerability descriptions
      - Impact analyses
@@ -355,6 +384,7 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
    - Use prompt engineering to ensure output is based on actual data.
 
 4. **User Review & Editing**
+
    - Develop a UI for users to review and edit AI-generated reports.
    - Highlight sections that require manual verification.
 
@@ -367,18 +397,22 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
 ## Phase 7: AI & Automation Enhancements
 
 1. **Central AI Module**
+
    - Develop a dedicated module/service to manage all AI tasks (recon analysis, payload generation, report writing).
    - Abstract model calls to facilitate swapping between API-based models (like GPT-4) and local models.
 
 2. **AI Model Management**
+
    - Provide configuration options for API keys or local model loading.
    - Allow adjustments to AI parameters (e.g., temperature, max tokens).
 
 3. **Context-Aware AI Suggestions**
+
    - Integrate a real-time AI “copilot” or chatbot for context-sensitive advice.
    - Ensure AI suggestions are based on current project and scan data.
 
 4. **Classification & Prioritization**
+
    - Incorporate or fine-tune an ML classifier for vulnerability severity and categorization.
    - Continuously improve AI accuracy based on feedback and historical data.
 
@@ -391,18 +425,22 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
 ## Phase 8: Plugin System Implementation
 
 1. **Plugin API Definition**
+
    - Define a clear plugin interface (e.g., a base class with methods such as `run(scope)`).
    - Document the API for external developers.
 
 2. **Plugin Discovery Mechanism**
+
    - Implement auto-discovery of plugins in a designated folder.
    - Create a plugin manager within the UI to enable/disable and manage plugins.
 
 3. **Security & Sandboxing**
+
    - Run plugins in an isolated process or container to limit risks.
    - Define permission flags (network access, file I/O, etc.) for each plugin.
 
 4. **Plugin Repository/Marketplace**
+
    - Set up documentation and a repository page for community-developed plugins.
    - Provide clear guidelines for plugin development and submission.
 
@@ -414,22 +452,27 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
 ## Phase 9: Collaboration & Multi-User Features
 
 1. **User Accounts & RBAC**
+
    - Implement multi-user account functionality with role-based access control (RBAC).
    - Link users and roles to specific projects.
 
 2. **Team Collaboration Workflow**
+
    - Enable project invitations and team collaboration features.
    - Display active user sessions (e.g., “Alice is editing a report”).
 
 3. **Real-Time Updates**
+
    - Implement WebSocket or polling mechanisms for real-time updates.
    - Provide a chat or commenting system for collaborative discussion on vulnerabilities.
 
 4. **Assignment & Task Tracking**
+
    - Allow users to assign vulnerabilities or tasks.
    - Visualize task status (e.g., “In progress,” “Verified”) in the UI.
 
 5. **Integration with External Systems (Optional)**
+
    - Consider integrations with tools like Jira, Slack, or Git.
    - Develop webhooks or API endpoints for custom integrations.
 
@@ -442,21 +485,26 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
 ## Phase 10: Security & Compliance Hardening
 
 1. **Legal & Ethical Safeguards**
+
    - Display an EULA/disclaimer on first run, requiring user confirmation.
    - Implement strict scope guardrails and scanning limitations.
 
 2. **Secure Coding Audits**
+
    - Run SAST/DAST tools on the codebase.
    - Regularly update dependencies and use tools like pip-audit.
 
 3. **Protecting Sensitive Data**
+
    - Encrypt sensitive data (e.g., API keys) in the database.
    - Enforce HTTPS for server deployments and secure storage practices.
 
 4. **Plugin Sandboxing**
+
    - Finalize and harden the plugin sandboxing strategy.
 
 5. **Data Privacy**
+
    - Enable users to delete or anonymize personal data collected during recon.
    - Provide a clear privacy statement if telemetry or cloud features are used.
 
@@ -469,18 +517,22 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
 ## Phase 11: Testing & Quality Assurance
 
 1. **Unit & Integration Tests**
+
    - Develop unit tests for each module (recon, scanning, exploitation, AI).
    - Mock external APIs and services for consistent testing.
 
 2. **End-to-End Testing**
+
    - Set up a local test environment using intentionally vulnerable applications (e.g., DVWA, OWASP Juice Shop).
    - Validate complete workflows across modules.
 
 3. **Performance & Load Testing**
+
    - Test for concurrency and performance under heavy scanning loads.
    - Identify bottlenecks (e.g., Python GIL constraints) and optimize or offload tasks.
 
 4. **User Acceptance Testing**
+
    - Engage bug hunters or internal testers to evaluate UI, AI features, and overall experience.
    - Collect feedback and iterate accordingly.
 
@@ -493,19 +545,23 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
 ## Phase 12: Documentation & Initial Release
 
 1. **User Documentation**
+
    - Create a “Getting Started” guide covering installation, project creation, scanning, and report generation.
    - Develop a comprehensive user manual or wiki detailing each module and AI features.
    - Document AI disclaimers and best practices for verifying AI-generated content.
 
 2. **Developer Documentation**
+
    - Document the overall architecture, code structure, and plugin API.
    - Provide inline documentation and auto-generated docs where applicable.
 
 3. **Versioning & Release Strategy**
+
    - Adopt semantic versioning (e.g., v0.1, v1.0).
    - Prepare the project for packaging (Docker images, PyPI packages, or platform-specific builds).
 
 4. **Beta/Alpha Release**
+
    - Tag an initial release for community testing.
    - Clearly communicate known limitations and areas under active development.
 
@@ -518,15 +574,18 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
 ## Phase 13: Monetization & Advanced Features (Optional/Parallel)
 
 1. **Funding Strategy**
+
    - Launch GitHub Sponsors, OpenCollective, or Patreon for community funding.
    - Explore corporate sponsorship opportunities.
 
 2. **Paid “Premium/Cloud” Tier**
+
    - Identify advanced AI features or collaboration tools for a premium offering.
    - Implement licensing or subscription mechanisms if needed.
    - Clearly differentiate between the free core and premium add-ons.
 
 3. **Enterprise Plugins (Optional)**
+
    - Develop features like SSO, advanced RBAC, and audit logs for enterprise use.
    - Consider a separate repository or additional licensing for enterprise features.
 
@@ -539,18 +598,22 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
 ## Phase 14: Ongoing Maintenance & Growth
 
 1. **Bug Fixes & Security Patches**
+
    - Establish a process for handling vulnerability reports for Anarchy Copilot.
    - Roll out patches and updates promptly as issues are identified.
 
 2. **Community Building**
+
    - Actively engage with contributors via GitHub issues and pull requests.
    - Foster community interaction through dedicated channels (Discord, Slack, etc.).
 
 3. **Roadmap Updates**
+
    - Maintain a public roadmap or project board with planned features.
    - Regularly update the community on progress and upcoming enhancements.
 
 4. **Refinements & Optimizations**
+
    - Continuously refactor performance bottlenecks.
    - Consider migrating performance-critical components to Rust/Go when necessary.
 
@@ -561,7 +624,7 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
 
 ---
 
-*This checklist is intended as a living document. Adjust, iterate, and expand upon these items as Anarchy Copilot evolves and user feedback shapes future developments.*
+_This checklist is intended as a living document. Adjust, iterate, and expand upon these items as Anarchy Copilot evolves and user feedback shapes future developments._
 
 ---
 

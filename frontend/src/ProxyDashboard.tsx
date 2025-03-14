@@ -18,10 +18,6 @@ import {
   TableContainer,
   TableHead,
   TableRow,
-  FormControl,
-  InputLabel,
-  Select,
-  MenuItem,
 } from '@mui/material';
 import { InterceptorView } from './components/proxy/InterceptorView';
 import ConnectionMonitor from './components/proxy/ConnectionMonitor';
@@ -92,15 +88,13 @@ const CustomTabPanel: React.FC<CustomTabPanelProps> = ({ children, value, index 
 const ProxyDashboardContent: React.FC = () => {
   const {
     currentUser,
-    setCurrentUser,
-    users,
     projects,
     loadingUsers,
     loadingProjects,
     error: userError
   } = useUser();
 
-  const [selectedProject, setSelectedProject] = useState<number | ''>('');
+  const selectedProject = projects.length ? projects[0].id : '';
   const [selectedRequest, setSelectedRequest] = useState<any>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [currentRequestIndex, setCurrentRequestIndex] = useState<number>(0);
@@ -312,42 +306,6 @@ const ProxyDashboardContent: React.FC = () => {
           <Paper sx={{ p: 2 }}>
             <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
               <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                {/* User Selection */}
-                <FormControl sx={{ minWidth: 200 }}>
-                  <InputLabel>User</InputLabel>
-                  <Select
-                    value={currentUser?.id || ''}
-                    label="User"
-                    onChange={(e) => {
-                      const userId = e.target.value;
-                      const user = users.find(u => u.id === userId);
-                      if (user) setCurrentUser(user);
-                    }}
-                  >
-                    {users.map(user => (
-                      <MenuItem key={user.id} value={user.id}>
-                        {user.username}
-                      </MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-
-                {/* Project Selection */}
-                <FormControl sx={{ minWidth: 200 }}>
-                  <InputLabel>Project</InputLabel>
-                  <Select
-                    value={selectedProject}
-                    label="Project"
-                    onChange={(e) => setSelectedProject(Number(e.target.value))}
-                  >
-                    {projects.map(project => (
-                      <MenuItem key={project.id} value={project.id}>
-                        {project.name}
-                      </MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-
                 <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                   <Typography variant="h6">
                     Proxy Status: {status?.isRunning ? 'Running' : 'Stopped'}

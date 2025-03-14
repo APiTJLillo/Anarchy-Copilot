@@ -33,6 +33,7 @@ import {
   Speed as MonitoringIcon,
 } from '@mui/icons-material';
 import { ProjectSelector } from '../projects/ProjectSelector';
+import { UserProvider, useUser, User } from '../../contexts/UserContext';
 
 const DRAWER_WIDTH = 240;
 
@@ -69,14 +70,14 @@ interface AppLayoutProps {
   children: React.ReactNode;
 }
 
-export default function AppLayout({ children }: AppLayoutProps) {
+function AppLayoutContent({ children }: AppLayoutProps) {
   const theme = useTheme();
   const navigate = useNavigate();
   const location = useLocation();
   const [drawerOpen, setDrawerOpen] = useState(true);
-
   const [anchorEl, setAnchorEl] = useState<null | HTMLElement>(null);
-  const [currentUser, setCurrentUser] = useState<string>('User1');
+
+  const { users, currentUser, setCurrentUser } = useUser();
 
   const handleUserMenuClick = (event: React.MouseEvent<HTMLElement>) => {
     setAnchorEl(event.currentTarget);
@@ -84,11 +85,6 @@ export default function AppLayout({ children }: AppLayoutProps) {
 
   const handleUserMenuClose = () => {
     setAnchorEl(null);
-  };
-
-  const handleUserSwitch = (user: string) => {
-    setCurrentUser(user);
-    handleUserMenuClose();
   };
 
   const handleDrawerToggle = () => {
@@ -168,16 +164,21 @@ export default function AppLayout({ children }: AppLayoutProps) {
                 <ProjectSelector onCreateClick={() => navigate('/projects')} />
               </Box>
               <Avatar onClick={handleUserMenuClick} sx={{ cursor: 'pointer', ml: 2 }}>
-                {currentUser[0]}
+                {currentUser?.username[0] || '?'}
               </Avatar>
               <Menu
                 anchorEl={anchorEl}
                 open={Boolean(anchorEl)}
                 onClose={handleUserMenuClose}
               >
-                <MenuItem onClick={() => handleUserSwitch('User1')}>User1</MenuItem>
-                <MenuItem onClick={() => handleUserSwitch('User2')}>User2</MenuItem>
-                <MenuItem onClick={() => handleUserSwitch('User3')}>User3</MenuItem>
+                {users.map((user: User) => (
+                  <MenuItem key={user.id} onClick={() => {
+                    setCurrentUser(user);
+                    handleUserMenuClose();
+                  }}>
+                    {user.username}
+                  </MenuItem>
+                ))}
               </Menu>
             </Box>
           </Box>
@@ -217,5 +218,13 @@ export default function AppLayout({ children }: AppLayoutProps) {
         {children}
       </Box>
     </Box>
+  );
+}
+
+export default function AppLayout(props: AppLayoutProps) {
+  return (
+    <UserProvider>
+      <AppLayoutContent {...props} />
+    </UserProvider>
   );
 }

@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import proxyApi from '../api/proxyApi';
 
-interface User {
+export interface User {
     id: number;
     username: string;
     email: string;

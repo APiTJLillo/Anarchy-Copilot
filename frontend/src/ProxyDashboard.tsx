@@ -28,8 +28,11 @@ import { UserProvider, useUser } from './contexts/UserContext';
 import AnalysisResults from './components/proxy/AnalysisResults';
 import InterceptionRuleManager from './components/proxy/InterceptionRuleManager';
 import { Version } from './components/proxy/Version';
-import proxyApi from './api/proxyApi';
-import type { ProxySession, ProxySettings } from './api/proxyApi';
+import { useProxyApi } from './api/proxyApi';
+import { useWebSocket } from './hooks/useWebSocket';
+import { WS_ENDPOINT } from './config';
+import { reconstructUrl } from './utils/urlUtils';
+import type { ProxySession, ProxySettings, VersionInfo } from './api/proxyApi';
 import type { AnalysisResult } from './api/proxyApi';
 import ErrorBoundary from './components/proxy/ErrorBoundary';
 
@@ -93,6 +96,7 @@ const ProxyDashboardContent: React.FC = () => {
     loadingProjects,
     error: userError
   } = useUser();
+  const proxyApi = useProxyApi();
 
   const selectedProject = projects.length ? projects[0].id : '';
   const [selectedRequest, setSelectedRequest] = useState<any>(null);
@@ -104,6 +108,7 @@ const ProxyDashboardContent: React.FC = () => {
   const [history, setHistory] = useState<any[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [initialized, setInitialized] = useState(false);
   const [tabValue, setTabValue] = useState(0);
   const [localProxyEnabled, setLocalProxyEnabled] = useState(false);
   const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
@@ -122,35 +127,15 @@ const ProxyDashboardContent: React.FC = () => {
       const data = await proxyApi.getStatus();
       setStatus(data);
       setError(null);
+      setLoading(false);
+      return data;
     } catch (err) {
       setError('Failed to fetch proxy status');
       console.error(err);
+      setLoading(false);
+      return null;
     }
-  }, []);
-
-  const fetchHistory = useCallback(async () => {
-    try {
-      console.log('Fetching proxy history...');
-      const data = await proxyApi.getHistory();
-      console.log('Received history data:', data);
-      setHistory(data);
-      setError(null);
-    } catch (err) {
-      console.error('Failed to fetch proxy history:', err);
-      setError('Failed to fetch proxy history');
-    }
-  }, []);
-
-  const fetchAnalysisResults = useCallback(async () => {
-    try {
-      const data = await proxyApi.getAnalysisResults();
-      setAnalysisResults(data);
-      setError(null);
-    } catch (err) {
-      setError('Failed to fetch analysis results');
-      console.error(err);
-    }
-  }, []);
+  }, [proxyApi]);
 
   const handleLocalProxyToggle = (event: React.ChangeEvent<HTMLInputElement>) => {
     setLocalProxyEnabled(event.target.checked);
@@ -171,20 +156,6 @@ const ProxyDashboardContent: React.FC = () => {
       }
 
       // Create a new session
-      const newSession = await proxyApi.createSession("New Session", selectedProject, currentUser.id, {
-        host: "127.0.0.1",
-        port: 8083,
-        interceptRequests: true,
-        interceptResponses: true,
-        allowedHosts: [],
-        excludedHosts: [],
-        maxConnections: 100,
-        maxKeepaliveConnections: 20,
-        keepaliveTimeout: 30
-      });
-      setSession(newSession);
-
-      // Start the proxy with the new session
       const settings: ProxySettings = {
         host: "127.0.0.1",
         port: 8083,
@@ -197,6 +168,10 @@ const ProxyDashboardContent: React.FC = () => {
         keepaliveTimeout: 30
       };
 
+      const newSession = await proxyApi.createSession("New Session", selectedProject, currentUser.id, settings);
+      setSession(newSession);
+
+      // Start the proxy with the new session
       await proxyApi.startProxy(newSession.id, settings);
       await fetchStatus();
       if (localProxyEnabled) {
@@ -207,7 +182,7 @@ const ProxyDashboardContent: React.FC = () => {
       setError('Failed to start proxy');
       console.error(err);
     }
-  }, [fetchStatus, currentUser, selectedProject, localProxyEnabled]);
+  }, [fetchStatus, currentUser, selectedProject, localProxyEnabled, proxyApi]);
 
   const stopProxy = useCallback(async () => {
     try {
@@ -222,7 +197,7 @@ const ProxyDashboardContent: React.FC = () => {
       setError('Failed to stop proxy');
       console.error(err);
     }
-  }, [fetchStatus, localProxyEnabled]);
+  }, [fetchStatus, localProxyEnabled, proxyApi]);
 
   const clearAnalysisResults = useCallback(async () => {
     try {
@@ -233,58 +208,87 @@ const ProxyDashboardContent: React.FC = () => {
       setError('Failed to clear analysis results');
       console.error(err);
     }
-  }, []);
+  }, [proxyApi]);
 
+  type WSMessage =
+    | { type: 'proxy_status'; data: ProxyStatus }
+    | { type: 'proxy_history'; data: any[] }
+    | { type: 'proxy_analysis'; data: AnalysisResult[] }
+    | { type: 'version_info'; data: VersionInfo }
+    | {
+      type: 'initial_data'; data: {
+        status: ProxyStatus;
+        history: any[];
+        analysis: AnalysisResult[];
+        version: VersionInfo;
+      }
+    };
+
+  // Track WebSocket and data loading states
+  const [wsConnected, setWsConnected] = useState(false);
+  const [dataLoaded, setDataLoaded] = useState(false);
+
+  // Update initialized state when both WebSocket is connected and data is loaded
   useEffect(() => {
-    let mounted = true;
-    let pollId: NodeJS.Timeout | null = null;
+    if (wsConnected && dataLoaded) {
+      setInitialized(true);
+      setLoading(false);
+    }
+  }, [wsConnected, dataLoaded]);
 
-    const pollData = async () => {
-      if (!mounted) return;
-      try {
-        await Promise.all([
-          fetchStatus(),
-          fetchHistory(),
-          fetchAnalysisResults()
-        ]);
-      } catch (error) {
-        console.error('Error during polling:', error);
+  // WebSocket for live updates
+  useWebSocket<WSMessage>(WS_ENDPOINT, {
+    onMessage: (message) => {
+      if (message.type === 'initial_data') {
+        setStatus(message.data.status);
+        setHistory(message.data.history);
+        setAnalysisResults(message.data.analysis);
+        setDataLoaded(true);
+      } else if (initialized) {
+        // Only process updates after initialization
+        switch (message.type) {
+          case 'proxy_status':
+            setStatus(prevStatus => {
+              const statusChanged = JSON.stringify(message.data) !== JSON.stringify(prevStatus);
+              return statusChanged ? message.data : prevStatus;
+            });
+            break;
+          case 'proxy_history':
+            setHistory(prevHistory => {
+              const newEntry = message.data;
+              // Add new entry to the beginning of the history array
+              return [newEntry, ...prevHistory];
+            });
+            break;
+          case 'proxy_analysis':
+            setAnalysisResults(prevResults => {
+              const resultsChanged = JSON.stringify(message.data) !== JSON.stringify(prevResults);
+              return resultsChanged ? message.data : prevResults;
+            });
+            break;
+        }
       }
+    },
+    onOpen: () => {
+      setWsConnected(true);
+      setError(null);
+      console.log('WebSocket connected');
+    },
+    onClose: () => {
+      setWsConnected(false);
+      console.log('WebSocket disconnected');
+    },
+    onError: (err) => {
+      console.error('WebSocket error:', err);
+      setWsConnected(false);
+      setError('Failed to connect to proxy server');
+    },
+    reconnectAttempts: 5,
+    reconnectInterval: 3000,
+    keepAlive: true
+  });
 
-      if (mounted) {
-        pollId = setTimeout(pollData, 5000);
-      }
-    };
-
-    const init = async () => {
-      if (!mounted) return;
-      setLoading(true);
-      try {
-        await Promise.all([
-          fetchStatus(),
-          fetchHistory(),
-          fetchAnalysisResults()
-        ]);
-      } catch (error) {
-        console.error('Error during initial load:', error);
-      }
-      if (mounted) {
-        setLoading(false);
-        pollId = setTimeout(pollData, 5000);
-      }
-    };
-
-    init();
-
-    return () => {
-      mounted = false;
-      if (pollId) {
-        clearTimeout(pollId);
-      }
-    };
-  }, [fetchStatus, fetchHistory, fetchAnalysisResults]);
-
-  if (loading || loadingUsers || loadingProjects) {
+  if (!wsConnected || loadingUsers || loadingProjects) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
         <CircularProgress />
@@ -416,7 +420,7 @@ const ProxyDashboardContent: React.FC = () => {
                               >
                                 <TableCell>{entry.method}</TableCell>
                                 <TableCell sx={{ maxWidth: 400, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                                  {entry.url}
+                                  {reconstructUrl(entry)}
                                 </TableCell>
                                 <TableCell>{entry.response_status}</TableCell>
                                 <TableCell>{entry.duration ? `${(entry.duration * 1000).toFixed(2)}ms` : 'N/A'}</TableCell>

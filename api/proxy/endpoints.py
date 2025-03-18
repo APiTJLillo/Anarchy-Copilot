@@ -1,6 +1,16 @@
 """FastAPI endpoints for proxy functionality."""
 
+import logging
 from . import router
+import json
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "create_session",
@@ -35,7 +45,6 @@ from .database_models import (
 )
 from models.proxy import ProxyHistoryEntry
 
-import logging
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -192,14 +201,33 @@ async def get_history(
         result = await db.execute(stmt)
         entries = list(result.scalars().all())
         
-        # Ensure request_headers is always a dictionary
+        # Process each entry to ensure proper data format
         for entry in entries:
+            # Ensure headers are always dictionaries
             if entry.request_headers is None:
                 entry.request_headers = {}
             if entry.response_headers is None:
                 entry.response_headers = {}
+            
+            # Ensure tags is always a list
             if entry.tags is None:
                 entry.tags = []
+            elif isinstance(entry.tags, str):
+                try:
+                    entry.tags = json.loads(entry.tags)
+                except:
+                    entry.tags = [entry.tags]
+
+            # Include decrypted data if available
+            if entry.decrypted_request is not None:
+                entry.request_body = entry.decrypted_request
+                if 'decrypted' not in entry.tags:
+                    entry.tags.append('decrypted')
+
+            if entry.decrypted_response is not None:
+                entry.response_body = entry.decrypted_response
+                if 'decrypted' not in entry.tags:
+                    entry.tags.append('decrypted')
         
         return entries
     except Exception as e:

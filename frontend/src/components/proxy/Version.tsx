@@ -1,33 +1,36 @@
-import React, { useEffect, useState } from 'react';
-import { Typography, Box, Chip, Tooltip } from '@mui/material';
+import React, { useState } from 'react';
+import { Typography, Box, Chip, Tooltip, CircularProgress } from '@mui/material';
 import InfoIcon from '@mui/icons-material/Info';
-import proxyApi from '../../api/proxyApi';
+import { useWebSocket } from '../../hooks/useWebSocket';
+import { WS_ENDPOINT } from '../../config';
 import type { VersionInfo } from '../../api/proxyApi';
+
+type WSMessage = 
+  | { type: 'version_info'; data: VersionInfo }
+  | { type: 'initial_data'; data: { version: VersionInfo; [key: string]: any } };
 
 export const Version: React.FC = () => {
     const [version, setVersion] = useState<VersionInfo | null>(null);
-    const [error, setError] = useState<string | null>(null);
-
-    useEffect(() => {
-        const fetchVersion = async () => {
-            try {
-                const data = await proxyApi.getVersion();
-                setVersion(data);
-            } catch (err) {
-                setError('Failed to fetch version info');
-                console.error(err);
+    const { isConnected, error } = useWebSocket<WSMessage>(WS_ENDPOINT, {
+        onMessage: (message) => {
+            if (message.type === 'version_info') {
+                setVersion(message.data);
+            } else if (message.type === 'initial_data') {
+                setVersion(message.data.version);
             }
-        };
+        }
+    });
 
-        fetchVersion();
-    }, []);
-
-    if (error) {
-        return null; // Don't show anything if there's an error
-    }
-
-    if (!version) {
-        return null;
+    if (error) return null;
+    if (!isConnected || !version) {
+        return (
+            <Box display="flex" alignItems="center">
+                <CircularProgress size={20} sx={{ mr: 1 }} />
+                <Typography variant="body2" color="textSecondary">
+                    Loading version...
+                </Typography>
+            </Box>
+        );
     }
 
     return (

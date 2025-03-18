@@ -11,17 +11,15 @@ export const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localh
 
 /**
  * WebSocket endpoint for proxy monitoring.
- * Browser always connects through localhost since Docker DNS resolution
- * isn't available in the browser context
+ * Using environment variable or falling back to relative URL that matches backend route
  */
-export const WS_ENDPOINT = `${API_BASE_URL.replace('http', 'ws')}/api/proxy/ws`;
+export const WS_ENDPOINT = process.env.REACT_APP_WS_ENDPOINT || 'ws://localhost:8000/api/proxy/ws';
 
 /**
  * WebSocket endpoint for proxy interception.
- * Browser always connects through localhost since Docker DNS resolution
- * isn't available in the browser context
+ * Using environment variable or falling back to relative URL that matches backend route
  */
-export const WS_INTERCEPT_ENDPOINT = `${API_BASE_URL.replace('http', 'ws')}/api/proxy/ws/intercept`;
+export const WS_INTERCEPT_ENDPOINT = process.env.REACT_APP_WS_INTERCEPT_ENDPOINT || 'ws://localhost:8000/api/proxy/ws/intercept';
 
 /**
  * Configuration options.
@@ -38,10 +36,10 @@ export const CONFIG = {
     DEFAULT_PROXY_CONFIG: {
         host: '127.0.0.1',
         port: 8083,
-        interceptRequests: true,
-        interceptResponses: true,
-        allowedHosts: [],
-        excludedHosts: []
+        intercept_requests: true,
+        intercept_responses: true,
+        allowed_hosts: [],
+        excluded_hosts: []
     },
 
     /**

@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   dev:
     build:
@@ -104,7 +102,7 @@ services:
       - NODE_ENV=development
       - REACT_APP_API_BASE_URL=http://localhost:8000
       - REACT_APP_PROXY_URL=http://localhost:8083
-      - REACT_APP_WS_URL=ws://localhost:8000
+      - REACT_APP_WS_URL=ws://localhost:8000/api/proxy/ws
       - PORT=3000 # Set explicit port for React dev server
       - WDS_SOCKET_PORT=3000
     depends_on:

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 
-interface WebSocketHookOptions {
-    onMessage?: (data: any) => void;
+interface WebSocketHookOptions<T = any> {
+    onMessage?: (data: T) => void;
     onOpen?: () => void;
     onClose?: () => void;
     onError?: (error: Event) => void;
@@ -10,10 +10,33 @@ interface WebSocketHookOptions {
     keepAlive?: boolean;
 }
 
-// Singleton WebSocket instance for persistent connections
-const globalWebSockets = new Map<string, WebSocket>();
+interface WebSocketConnection<T = any> {
+    socket: WebSocket;
+    subscribers: Set<(data: T) => void>;
+}
 
-export const useWebSocket = (url: string, options: WebSocketHookOptions = {}) => {
+// Singleton WebSocket instance and subscriber management
+const globalWebSockets = new Map<string, WebSocketConnection>();
+
+const addSubscriber = <T>(url: string, onMessage: (data: T) => void) => {
+    const connection = globalWebSockets.get(url);
+    if (connection) {
+        connection.subscribers.add(onMessage);
+    }
+};
+
+const removeSubscriber = <T>(url: string, onMessage: (data: T) => void) => {
+    const connection = globalWebSockets.get(url);
+    if (connection) {
+        connection.subscribers.delete(onMessage);
+        // If no more subscribers and socket is closed, clean up
+        if (connection.subscribers.size === 0 && connection.socket.readyState === WebSocket.CLOSED) {
+            globalWebSockets.delete(url);
+        }
+    }
+};
+
+export const useWebSocket = <T = any>(url: string, options: WebSocketHookOptions<T> = {}) => {
     const {
         onMessage,
         onOpen,
@@ -34,17 +57,22 @@ export const useWebSocket = (url: string, options: WebSocketHookOptions = {}) =>
     const connect = useCallback(() => {
         try {
             // Check if we already have a connection for this URL
-            let socket = keepAlive ? globalWebSockets.get(url) : null;
+            let connection = keepAlive ? globalWebSockets.get(url) : null;
 
             // If no existing connection or it's closed, create a new one
-            if (!socket || socket.readyState === WebSocket.CLOSED) {
-                socket = new WebSocket(url);
+            if (!connection || connection.socket.readyState === WebSocket.CLOSED) {
+                const socket = new WebSocket(url);
+                connection = { socket, subscribers: new Set() };
                 if (keepAlive) {
-                    globalWebSockets.set(url, socket);
+                    globalWebSockets.set(url, connection);
                 }
             }
 
-            socket.onopen = () => {
+            if (onMessage) {
+                addSubscriber(url, onMessage);
+            }
+
+            connection.socket.onopen = () => {
                 console.log('WebSocket connected');
                 if (mountedRef.current) {
                     setIsConnected(true);
@@ -54,12 +82,13 @@ export const useWebSocket = (url: string, options: WebSocketHookOptions = {}) =>
                 if (onOpen) onOpen();
             };
 
-            socket.onmessage = (event) => {
+            connection.socket.onmessage = (event) => {
                 const data = JSON.parse(event.data);
-                if (onMessage) onMessage(data);
+                // Broadcast to all subscribers
+                connection?.subscribers.forEach(subscriber => subscriber(data));
             };
 
-            socket.onclose = () => {
+            connection.socket.onclose = () => {
                 console.log('WebSocket closed');
                 if (mountedRef.current) {
                     setIsConnected(false);
@@ -83,7 +112,7 @@ export const useWebSocket = (url: string, options: WebSocketHookOptions = {}) =>
                 }
             };
 
-            socket.onerror = (err) => {
+            connection.socket.onerror = (err) => {
                 console.error('WebSocket error:', err);
                 if (mountedRef.current) {
                     setError(err);
@@ -91,7 +120,7 @@ export const useWebSocket = (url: string, options: WebSocketHookOptions = {}) =>
                 if (onError) onError(err);
             };
 
-            ws.current = socket;
+            ws.current = connection.socket;
         } catch (err) {
             console.error('Failed to create WebSocket:', err);
             if (mountedRef.current) {
@@ -104,9 +133,12 @@ export const useWebSocket = (url: string, options: WebSocketHookOptions = {}) =>
         mountedRef.current = true;
 
         // If we have an existing connection, use it
-        const existingSocket = keepAlive ? globalWebSockets.get(url) : null;
-        if (existingSocket && existingSocket.readyState === WebSocket.OPEN) {
-            ws.current = existingSocket;
+        const existingConnection = keepAlive ? globalWebSockets.get(url) : null;
+        if (existingConnection && existingConnection.socket.readyState === WebSocket.OPEN) {
+            ws.current = existingConnection.socket;
+            if (onMessage) {
+                addSubscriber(url, onMessage);
+            }
             setIsConnected(true);
             if (onOpen) onOpen();
         } else {
@@ -117,6 +149,10 @@ export const useWebSocket = (url: string, options: WebSocketHookOptions = {}) =>
             mountedRef.current = false;
             if (reconnectTimeoutRef.current) {
                 clearTimeout(reconnectTimeoutRef.current);
+            }
+            // Remove the message subscriber
+            if (onMessage) {
+                removeSubscriber(url, onMessage);
             }
             // Only close the socket if we're not keeping it alive
             if (!keepAlive && ws.current) {

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
     Dialog,
     DialogTitle,
@@ -10,7 +10,14 @@ import {
     Tab,
     Tabs,
     IconButton,
+    Tooltip,
+    CircularProgress,
 } from '@mui/material';
+import Editor from "@monaco-editor/react";
+import { getEditorLanguage, formatHeaders } from '../../utils/editorUtils';
+import { reconstructUrl } from '../../utils/urlUtils';
+import ReplayIcon from '@mui/icons-material/Replay';
+import { useResendRequest } from '../../hooks/useResendRequest';
 import KeyboardArrowLeftIcon from '@mui/icons-material/KeyboardArrowLeft';
 import KeyboardArrowRightIcon from '@mui/icons-material/KeyboardArrowRight';
 import CloseIcon from '@mui/icons-material/Close';
@@ -71,6 +78,7 @@ interface RequestModalProps {
     history: RequestData[];
     currentIndex: number;
     onNavigate: (index: number) => void;
+    onRequestResent?: () => void;
 }
 
 export const RequestModal: React.FC<RequestModalProps> = ({
@@ -79,20 +87,60 @@ export const RequestModal: React.FC<RequestModalProps> = ({
     request,
     history,
     currentIndex,
-    onNavigate
+    onNavigate,
+    onRequestResent
 }) => {
     const [tabValue, setTabValue] = React.useState(0);
+    const { resendRequest, isResending, error: resendError } = useResendRequest();
 
-    const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
-        setTabValue(newValue);
+    const decodeBase64Data = (data: string | null | undefined): string => {
+        if (!data) return '';
+
+        console.log('Decoding data:', {
+            isBase64Url: data.startsWith('base64://'),
+            dataLength: data.length,
+            firstFewChars: data.substring(0, 50)
+        });
+
+        // First try to decode base64:// prefixed data
+        if (data.startsWith('base64://')) {
+            try {
+                const decoded = atob(data.substring('base64://'.length));
+                console.log('Successfully decoded base64:// data');
+                return decoded;
+            } catch (e) {
+                console.error('Failed to decode base64:// data:', e);
+            }
+        }
+
+        // Then try to decode potential raw base64 data
+        try {
+            // Simple heuristic: if the string contains only valid base64 characters
+            if (/^[A-Za-z0-9+/=]+$/.test(data)) {
+                const decoded = atob(data);
+                // Check if it looks like an HTTP message or contains printable characters
+                if (decoded.startsWith('HTTP/') ||
+                    decoded.includes('\r\n') ||
+                    decoded.includes('\n') ||
+                    /^[\x20-\x7E\t\n\r]*$/.test(decoded)) {
+                    console.log('Successfully decoded raw base64 data');
+                    return decoded;
+                }
+            }
+        } catch (e) {
+            console.error('Failed to decode potential base64 data:', e);
+        }
+
+        // Return original data if we couldn't decode it
+        return data;
     };
 
     const parseTags = (tags: string | string[] | undefined | null): string[] => {
         if (!tags) return [];
-        
+
         // Handle case where tags is already an array
         if (Array.isArray(tags)) return tags;
-        
+
         // Handle string case
         if (typeof tags === 'string') {
             try {
@@ -103,7 +151,7 @@ export const RequestModal: React.FC<RequestModalProps> = ({
                 return tags.replace(/[\[\]'"\s]/g, '').split(',');
             }
         }
-        
+
         return [];
     };
 
@@ -115,44 +163,107 @@ export const RequestModal: React.FC<RequestModalProps> = ({
         return parsedTags.includes('decrypted') ? 'decrypted' : 'raw';
     };
 
-    if (!request) return null;
-
     const getDataByTags = (request: RequestData, type: string) => {
-        if (!request || !request.tags) return null;
+        if (!request) return null;
 
         const tags = parseTags(request.tags);
-        const decrypted = tags.includes('decrypted');
-        const raw = tags.includes('raw');
-        
-        // Always prefer decrypted data if available
+        console.log('Request data:', {
+            type,
+            tags,
+            hasDecryptedRequest: !!request.decrypted_request,
+            hasDecryptedResponse: !!request.decrypted_response,
+            hasRawRequest: !!request.raw_request,
+            hasRawResponse: !!request.raw_response,
+            hasRequestBody: !!request.request_body,
+            hasResponseBody: !!request.response_body
+        });
+
+        // Special handling for URL
+        if (type === 'url') {
+            // For raw data entries, try to extract URL from request body first
+            if ((request.url === 'raw://data' || request.url === '/') && request.request_body) {
+                try {
+                    const decodedBody = decodeBase64Data(request.request_body);
+                    // Try to extract the first line which should contain the request line
+                    const lines = decodedBody.split(/\r?\n/);
+                    const requestLine = lines[0];
+                    const hostLine = lines.find(line => line.toLowerCase().startsWith('host:'));
+
+                    if (requestLine && requestLine.includes(' ')) {
+                        // Extract path from "METHOD /path HTTP/1.1"
+                        const [, path] = requestLine.split(' ');
+                        if (path) {
+                            console.log('Extracted path from request line:', path);
+                            // If we have a host header, use it to construct the full URL
+                            if (hostLine) {
+                                const host = hostLine.split(':')[1].trim();
+                                console.log('Extracted host from headers:', host);
+                                return reconstructUrl({
+                                    ...request,
+                                    url: path,
+                                    host: host
+                                });
+                            }
+                            return reconstructUrl({
+                                ...request,
+                                url: path
+                            });
+                        }
+                    }
+                } catch (e) {
+                    console.error('Failed to extract URL from request body:', e);
+                }
+            }
+            return reconstructUrl(request);
+        }
+
+        // For request data
         if (type === 'request') {
-            if (decrypted && request.decrypted_request) {
-                return request.decrypted_request;
-            } else if (raw && request.raw_request) {
-                return request.raw_request;
-            } else if (request.request_body) {
-                return request.request_body;
+            // First try decrypted data if available
+            if (request.decrypted_request) {
+                console.log('Using decrypted request data');
+                return decodeBase64Data(request.decrypted_request);
+            }
+            // Then try raw request if raw tag is present
+            if (tags.includes('raw') && request.raw_request) {
+                console.log('Using raw request data');
+                return decodeBase64Data(request.raw_request);
+            }
+            // Finally fall back to regular request body
+            if (request.request_body) {
+                console.log('Using regular request body');
+                return decodeBase64Data(request.request_body);
             }
             return null;
         }
-        
+
+        // For response data
         if (type === 'response') {
-            if (decrypted && request.decrypted_response) {
+            // First try decrypted data if available and decrypted tag is present
+            if (tags.includes('decrypted') && request.decrypted_response) {
+                console.log('Using decrypted response data');
                 return request.decrypted_response;
-            } else if (raw && request.raw_response) {
-                return request.raw_response;
-            } else if (request.response_body) {
-                return request.response_body;
+            }
+            // Then try raw response if raw tag is present
+            if (tags.includes('raw') && request.raw_response) {
+                console.log('Using raw response data');
+                return decodeBase64Data(request.raw_response);
+            }
+            // Finally fall back to regular response body
+            if (request.response_body) {
+                console.log('Using regular response body');
+                return decodeBase64Data(request.response_body);
             }
             return null;
         }
-        
+
         if (type === 'request_headers') {
             try {
-                if (decrypted && request.request_headers) {
-                    return typeof request.request_headers === 'string' ? 
-                        JSON.parse(request.request_headers) : 
+                if (request.request_headers) {
+                    const headers = typeof request.request_headers === 'string' ?
+                        JSON.parse(request.request_headers) :
                         request.request_headers;
+                    return headers;
                 }
                 return null;
             } catch (e) {
@@ -160,13 +271,14 @@ export const RequestModal: React.FC<RequestModalProps> = ({
                 return null;
             }
         }
-        
+
         if (type === 'response_headers') {
             try {
-                if (decrypted && request.response_headers) {
-                    return typeof request.response_headers === 'string' ? 
-                        JSON.parse(request.response_headers) : 
+                if (request.response_headers) {
+                    const headers = typeof request.response_headers === 'string' ?
+                        JSON.parse(request.response_headers) :
                         request.response_headers;
+                    return headers;
                 }
                 return null;
             } catch (e) {
@@ -174,26 +286,126 @@ export const RequestModal: React.FC<RequestModalProps> = ({
                 return null;
             }
         }
-        
+
         return null;
     };
 
-    const decodeBase64 = (data: string): string => {
-        if (!data) return '';
-        if (data.startsWith('base64://')) {
-            try {
-                return atob(data.substring('base64://'.length));
-            } catch {
-                return 'Failed to decode base64 data';
-            }
+    const [editedRequest, setEditedRequest] = useState<{
+        method: string;
+        url: string;
+        headers: Record<string, string> | string;
+        body: string;
+    }>(() => ({
+        method: request?.method || 'GET',
+        url: getDataByTags(request, 'url') || '',
+        headers: request?.request_headers ? (
+            typeof request.request_headers === 'string'
+                ? JSON.parse(request.request_headers)
+                : request.request_headers
+        ) : {},
+        body: request?.request_body || ''
+    }));
+
+    const [editedResponse, setEditedResponse] = useState<{
+        headers: Record<string, string> | string;
+        body: string;
+    }>(() => ({
+        headers: request?.response_headers ? (
+            typeof request.response_headers === 'string'
+                ? JSON.parse(request.response_headers)
+                : request.response_headers
+        ) : {},
+        body: request?.response_body || ''
+    }));
+
+    // Update state when request changes
+    React.useEffect(() => {
+        if (request) {
+            setEditedRequest({
+                method: request.method,
+                url: getDataByTags(request, 'url') || '',
+                headers: typeof request.request_headers === 'string'
+                    ? JSON.parse(request.request_headers)
+                    : request.request_headers,
+                body: request.request_body || ''
+            });
+
+            setEditedResponse({
+                headers: typeof request.response_headers === 'string'
+                    ? JSON.parse(request.response_headers)
+                    : request.response_headers,
+                body: request.response_body || ''
+            });
         }
-        return data;
+    }, [request]);
+
+    const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
+        setTabValue(newValue);
+    };
+
+    const hasChanges = (): boolean => {
+        if (!request) return false;
+
+        // Get the original URL for comparison
+        const originalUrl = getDataByTags(request, 'url') || '';
+
+        // Normalize headers for comparison
+        const normalizeHeaders = (headers: any) => {
+            if (typeof headers === 'string') {
+                try {
+                    return JSON.parse(headers);
+                } catch {
+                    return {};
+                }
+            }
+            return headers || {};
+        };
+
+        const originalHeaders = normalizeHeaders(request.request_headers);
+        const currentHeaders = normalizeHeaders(editedRequest.headers);
+
+        // Compare headers as stringified objects
+        const headersEqual = JSON.stringify(originalHeaders) === JSON.stringify(currentHeaders);
+
+        // Compare all fields
+        return request.method !== editedRequest.method ||
+            originalUrl !== editedRequest.url ||
+            !headersEqual ||
+            (request.request_body || '') !== (editedRequest.body || '');
+    };
+
+    const handleResend = async () => {
+        try {
+            let parsedHeaders;
+            try {
+                parsedHeaders = typeof editedRequest.headers === 'string'
+                    ? JSON.parse(editedRequest.headers)
+                    : editedRequest.headers;
+            } catch (err) {
+                console.error('Failed to parse headers:', err);
+                return;
+            }
+
+            const result = await resendRequest({
+                requestId: request.id,
+                method: editedRequest.method,
+                url: editedRequest.url,
+                headers: parsedHeaders,
+                body: editedRequest.body
+            });
+            if (onRequestResent) {
+                onRequestResent();
+            }
+            return result;
+        } catch (error) {
+            console.error('Failed to resend request:', error);
+        }
     };
 
     const formatData = (type: string) => {
         const data = getDataByTags(request, type);
         if (!data) return 'No data available';
-        
+
         try {
             // For headers that are already JSON objects
             if (typeof data === 'object') {
@@ -201,7 +413,7 @@ export const RequestModal: React.FC<RequestModalProps> = ({
             }
 
             // Handle base64 encoded data first
-            const decodedData = decodeBase64(data);
+            const decodedData = decodeBase64Data(data);
 
             // Try parsing as JSON
             try {
@@ -216,6 +428,8 @@ export const RequestModal: React.FC<RequestModalProps> = ({
         }
     };
 
+    if (!request) return null;
+
     return (
         <Dialog
             open={open}
@@ -224,246 +438,287 @@ export const RequestModal: React.FC<RequestModalProps> = ({
             fullWidth
             PaperProps={{ sx: { height: '80vh' } }}
         >
-            <DialogTitle sx={{ p: 2 }}>
-                <Box sx={{ display: 'flex', alignItems: 'flex-start', gap: 2 }}>
-                    <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 1 }}>
-                        <Box sx={{ mb: 0.5 }}>
-                            <Typography variant="h6" component="div" sx={{ 
-                                display: 'flex', 
+            <DialogTitle sx={{ p: 2, position: 'relative' }}>
+                <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1, pr: '160px' }}>
+                    <Box sx={{ mb: 0.5 }}>
+                        <Typography variant="h6" component="div" sx={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 1.5,
+                            mb: 0.5
+                        }}>
+                            <Box sx={{
+                                display: 'flex',
                                 alignItems: 'center',
                                 gap: 1.5,
-                                mb: 0.5
+                                width: '100%'
                             }}>
-                                <Box component="span" sx={{ 
-                                    bgcolor: {
-                                        'GET': 'success.main',
-                                        'POST': 'info.main',
-                                        'PUT': 'warning.main',
-                                        'DELETE': 'error.main',
-                                        'PATCH': 'warning.dark',
-                                    }[request.method] || 'primary.main',
-                                    color: '#fff',
-                                    px: 1,
-                                    py: 0.5,
-                                    borderRadius: 1,
-                                    fontSize: '0.9rem',
-                                    fontWeight: 'bold',
-                                    minWidth: '70px',
-                                    textAlign: 'center',
-                                    letterSpacing: '0.5px'
-                                }}>
-                                    {request.method}
-                                </Box>
-                                <Box sx={{ 
-                                    display: 'flex', 
+                                <select
+                                    value={editedRequest.method}
+                                    onChange={(e) => setEditedRequest({
+                                        ...editedRequest,
+                                        method: e.target.value
+                                    })}
+                                    style={{
+                                        backgroundColor: {
+                                            'GET': '#2e7d32',
+                                            'POST': '#0288d1',
+                                            'PUT': '#ed6c02',
+                                            'DELETE': '#d32f2f',
+                                            'PATCH': '#ed6c02',
+                                        }[editedRequest.method] || '#1976d2',
+                                        color: '#fff',
+                                        padding: '4px 8px',
+                                        borderRadius: '4px',
+                                        border: 'none',
+                                        fontSize: '0.9rem',
+                                        fontWeight: 'bold',
+                                        minWidth: '70px',
+                                        cursor: 'pointer'
+                                    }}
+                                >
+                                    {['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'].map(method => (
+                                        <option key={method} value={method}>{method}</option>
+                                    ))}
+                                </select>
+                                <Box sx={{
+                                    flex: 1,
+                                    display: 'flex',
                                     alignItems: 'center',
                                     fontFamily: 'monospace',
                                     fontSize: '0.95rem',
-                                    fontWeight: 'medium',
                                     bgcolor: 'background.paper',
                                     borderRadius: 1,
                                     overflow: 'hidden',
                                     border: '1px solid',
                                     borderColor: 'divider',
                                 }}>
-                                    {request.host && (
-                                        <Box component="span" sx={{ 
-                                            px: 1,
-                                            py: 0.5,
-                                            bgcolor: 'background.default',
-                                            borderRight: '1px solid',
-                                            borderColor: 'divider',
-                                            color: 'text.secondary'
-                                        }}>
-                                            {request.host}
-                                        </Box>
-                                    )}
-                                    <Box component="span" sx={{ 
-                                        px: 1,
-                                        py: 0.5,
-                                        color: 'text.primary'
-                                    }}>
-                                        {request.path || request.url}
-                                    </Box>
+                                    <input
+                                        type="text"
+                                        value={editedRequest.url}
+                                        onChange={(e) => setEditedRequest({
+                                            ...editedRequest,
+                                            url: e.target.value
+                                        })}
+                                        style={{
+                                            width: '100%',
+                                            border: 'none',
+                                            padding: '8px 12px',
+                                            fontFamily: 'inherit',
+                                            fontSize: 'inherit',
+                                            backgroundColor: 'transparent',
+                                            color: '#fff'
+                                        }}
+                                    />
                                 </Box>
-                            </Typography>
-                            <Box sx={{ 
-                                display: 'flex', 
-                                alignItems: 'center', 
-                                gap: 2, 
-                                mt: 1.5,
-                                py: 0.75,
-                                px: 1.5,
-                                borderRadius: 1,
-                                bgcolor: 'rgba(0, 0, 0, 0.02)',
+                            </Box>
+                        </Typography>
+                        <Box sx={{
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 2,
+                            mt: 1.5,
+                            py: 0.75,
+                            px: 1.5,
+                            borderRadius: 1,
+                            bgcolor: 'rgba(0, 0, 0, 0.02)',
+                        }}>
+                            <Box sx={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 1
                             }}>
-                                <Box sx={{ 
-                                    display: 'flex', 
-                                    alignItems: 'center',
-                                    gap: 1
-                                }}>
-                                    <Box sx={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: 0.5,
-                                        color: request.response_status ? (
-                                            request.response_status < 300 ? 'success.main' :
-                                            request.response_status < 400 ? 'info.main' :
-                                            request.response_status < 500 ? 'warning.main' : 
-                                            'error.main'
-                                        ) : 'text.secondary'
-                                    }}>
-                                        <Box component="span" sx={{ 
-                                            fontWeight: 'bold',
-                                            fontSize: '1rem'
-                                        }}>
-                                            {request.response_status || request.status_code || 'Pending'}
-                                        </Box>
-                                        <Box component="span" sx={{ 
-                                            fontSize: '0.85rem',
-                                            opacity: 0.9
-                                        }}>
-                                            {request.response_status ? (
-                                                request.response_status < 300 ? 'Success' :
-                                                request.response_status < 400 ? 'Redirect' :
-                                                request.response_status < 500 ? 'Client Error' :
-                                                'Server Error'
-                                            ) : ''}
-                                        </Box>
-                                    </Box>
-                                </Box>
-                                <Box sx={{ height: '1rem', borderLeft: 1, borderColor: 'divider' }} />
-                                <Typography sx={{ 
+                                <Box sx={{
                                     display: 'flex',
                                     alignItems: 'center',
                                     gap: 0.5,
-                                    color: 'text.secondary',
-                                    fontSize: '0.9rem'
+                                    color: request.response_status ? (
+                                        request.response_status < 300 ? 'success.main' :
+                                            request.response_status < 400 ? 'info.main' :
+                                                request.response_status < 500 ? 'warning.main' :
+                                                    'error.main'
+                                    ) : 'text.secondary'
                                 }}>
-                                    <Box component="span" sx={{ opacity: 0.7 }}>Time:</Box>
-                                    {request.duration ? (
-                                        <Box component="span" sx={{ 
-                                            fontFamily: 'monospace',
-                                            color: request.duration > 1 ? 'warning.main' : 'text.primary'
-                                        }}>
-                                            {(request.duration * 1000).toFixed(2)}ms
-                                        </Box>
-                                    ) : 'N/A'}
-                                </Typography>
+                                    <Box component="span" sx={{
+                                        fontWeight: 'bold',
+                                        fontSize: '1rem'
+                                    }}>
+                                        {request.response_status || request.status_code || 'Pending'}
+                                    </Box>
+                                    <Box component="span" sx={{
+                                        fontSize: '0.85rem',
+                                        opacity: 0.9
+                                    }}>
+                                        {request.response_status ? (
+                                            request.response_status < 300 ? 'Success' :
+                                                request.response_status < 400 ? 'Redirect' :
+                                                    request.response_status < 500 ? 'Client Error' :
+                                                        'Server Error'
+                                        ) : ''}
+                                    </Box>
+                                </Box>
                             </Box>
-                        </Box>
-                        <Box sx={{ 
-                            display: 'flex', 
-                            gap: 2,
-                            alignItems: 'center',
-                            p: 1,
-                            borderRadius: 1,
-                            bgcolor: 'background.paper',
-                            border: '1px solid',
-                            borderColor: 'divider',
-                        }}>
+                            <Box sx={{ height: '1rem', borderLeft: 1, borderColor: 'divider' }} />
+                            <Typography sx={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: 0.5,
+                                color: 'text.secondary',
+                                fontSize: '0.9rem'
+                            }}>
+                                <Box component="span" sx={{ opacity: 0.7 }}>Time:</Box>
+                                {request.duration ? (
+                                    <Box component="span" sx={{
+                                        fontFamily: 'monospace',
+                                        color: request.duration > 1 ? 'warning.main' : 'text.primary'
+                                    }}>
+                                        {(request.duration * 1000).toFixed(2)}ms
+                                    </Box>
+                                ) : 'N/A'}
+                            </Typography>
+                            <Box sx={{ height: '1rem', borderLeft: 1, borderColor: 'divider' }} />
                             <Typography variant="caption" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
                                 <Box component="span" sx={{ opacity: 0.7 }}>Session:</Box>
                                 <Box component="span" sx={{ fontFamily: 'monospace', fontWeight: 'medium' }}>
                                     {request.session_id}
                                 </Box>
                             </Typography>
-                            <Box sx={{ mx: 2, height: '1rem', borderLeft: 1, borderColor: 'divider' }} />
+                            <Box sx={{ height: '1rem', borderLeft: 1, borderColor: 'divider' }} />
                             <Typography variant="caption" sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                                <Box component="span" sx={{ opacity: 0.7 }}>Time:</Box>
+                                <Box component="span" sx={{ opacity: 0.7 }}>Created:</Box>
                                 <Box component="span" sx={{ fontFamily: 'monospace' }}>
                                     {new Date(request.timestamp).toLocaleString()}
                                 </Box>
                             </Typography>
-                        </Box>
-                        <Box sx={{ display: 'flex', gap: 1.5, mt: 0.5 }}>
-                            <Typography variant="caption" sx={{ 
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: 0.5,
-                                bgcolor: request.is_intercepted ? 'info.main' : 'success.main',
-                                color: 'white',
-                                px: 1,
-                                py: 0.5,
-                                borderRadius: 1,
-                                fontSize: '0.75rem'
-                            }}>
-                                {request.is_intercepted ? '🔄 Intercepted' : '➡️ Passed'}
-                            </Typography>
-                            {request.is_encrypted && (
-                                <Typography variant="caption" sx={{ 
+                            <Box sx={{ height: '1rem', borderLeft: 1, borderColor: 'divider' }} />
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                <Typography variant="caption" sx={{
                                     display: 'inline-flex',
                                     alignItems: 'center',
                                     gap: 0.5,
-                                    bgcolor: 'warning.main',
-                                    color: 'warning.contrastText',
+                                    bgcolor: request.is_intercepted ? 'info.main' : 'success.main',
+                                    color: 'white',
                                     px: 1,
                                     py: 0.5,
                                     borderRadius: 1,
                                     fontSize: '0.75rem'
                                 }}>
-                                    🔒 Encrypted
+                                    {request.is_intercepted ? '🔄 Intercepted' : '➡️ Passed'}
                                 </Typography>
-                            )}
-                            {request.applied_rules && (
-                                <Typography variant="caption" sx={{ 
-                                    display: 'inline-flex',
-                                    alignItems: 'center',
-                                    gap: 0.5,
-                                    bgcolor: 'secondary.main',
-                                    color: 'secondary.contrastText',
-                                    px: 1,
-                                    py: 0.5,
-                                    borderRadius: 1,
-                                    fontSize: '0.75rem'
-                                }}>
-                                    📋 Rules Applied
-                                </Typography>
-                            )}
+                                {request.is_encrypted && (
+                                    <Typography variant="caption" sx={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: 0.5,
+                                        bgcolor: 'warning.main',
+                                        color: 'warning.contrastText',
+                                        px: 1,
+                                        py: 0.5,
+                                        borderRadius: 1,
+                                        fontSize: '0.75rem'
+                                    }}>
+                                        🔒 Encrypted
+                                    </Typography>
+                                )}
+                                {request.applied_rules && (
+                                    <Typography variant="caption" sx={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: 0.5,
+                                        bgcolor: 'secondary.main',
+                                        color: 'secondary.contrastText',
+                                        px: 1,
+                                        py: 0.5,
+                                        borderRadius: 1,
+                                        fontSize: '0.75rem'
+                                    }}>
+                                        📋 Rules Applied
+                                    </Typography>
+                                )}
+                                {hasChanges() && (
+                                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                        <Typography variant="caption" sx={{
+                                            display: 'inline-flex',
+                                            alignItems: 'center',
+                                            gap: 0.5,
+                                            bgcolor: 'warning.light',
+                                            color: 'warning.contrastText',
+                                            px: 1,
+                                            py: 0.5,
+                                            borderRadius: 1,
+                                            fontSize: '0.75rem'
+                                        }}>
+                                            ⚠️ Unsaved Changes
+                                        </Typography>
+                                        <Button
+                                            size="small"
+                                            variant="contained"
+                                            onClick={handleResend}
+                                            disabled={isResending}
+                                            sx={{
+                                                backgroundColor: 'warning.dark',
+                                                '&:hover': {
+                                                    backgroundColor: 'warning.dark',
+                                                    opacity: 0.9
+                                                },
+                                                py: 0.5,
+                                                minHeight: 0,
+                                                fontSize: '0.75rem'
+                                            }}
+                                        >
+                                            Resend Now
+                                        </Button>
+                                    </Box>
+                                )}
+                            </Box>
                         </Box>
-                    </Box>
-                    <Box sx={{ 
-                        display: 'flex', 
-                        alignItems: 'center', 
-                        gap: 0.5, 
-                        background: 'rgba(0, 0, 0, 0.03)',
-                        borderRadius: 1,
-                        py: 0.5,
-                        px: 1
-                    }}>
-                        <Box sx={{ display: 'flex', alignItems: 'center', mr: 1, borderRight: 1, borderColor: 'divider', pr: 1 }}>
-                            <IconButton
-                                size="small"
-                                onClick={() => onNavigate(currentIndex - 1)}
-                                disabled={currentIndex <= 0}
-                            >
-                                <KeyboardArrowLeftIcon fontSize="small" />
-                            </IconButton>
-                            <Typography variant="caption" sx={{ mx: 1, userSelect: 'none' }}>
-                                {currentIndex + 1} / {history.length}
-                            </Typography>
-                            <IconButton
-                                size="small"
-                                onClick={() => onNavigate(currentIndex + 1)}
-                                disabled={currentIndex >= history.length - 1}
-                            >
-                                <KeyboardArrowRightIcon fontSize="small" />
-                            </IconButton>
-                        </Box>
-                        <IconButton 
-                            size="small"
-                            onClick={onClose}
-                            sx={{ 
-                                '&:hover': {
-                                    color: 'error.main'
-                                }
-                            }}
-                        >
-                            <CloseIcon fontSize="small" />
-                        </IconButton>
                     </Box>
                 </Box>
             </DialogTitle>
+            <Box sx={{
+                position: 'absolute',
+                top: 16,
+                right: 16,
+                display: 'flex',
+                alignItems: 'center',
+                gap: 0.5,
+                background: 'rgba(0, 0, 0, 0.03)',
+                borderRadius: 1,
+                py: 0.5,
+                px: 1,
+                zIndex: 1
+            }}>
+                <Box sx={{ display: 'flex', alignItems: 'center', mr: 1, borderRight: 1, borderColor: 'divider', pr: 1 }}>
+                    <IconButton
+                        size="small"
+                        onClick={() => onNavigate(currentIndex - 1)}
+                        disabled={currentIndex <= 0}
+                    >
+                        <KeyboardArrowLeftIcon fontSize="small" />
+                    </IconButton>
+                    <Typography variant="caption" sx={{ mx: 1, userSelect: 'none' }}>
+                        {currentIndex + 1} / {history.length}
+                    </Typography>
+                    <IconButton
+                        size="small"
+                        onClick={() => onNavigate(currentIndex + 1)}
+                        disabled={currentIndex >= history.length - 1}
+                    >
+                        <KeyboardArrowRightIcon fontSize="small" />
+                    </IconButton>
+                </Box>
+                <IconButton
+                    size="small"
+                    onClick={onClose}
+                    sx={{
+                        '&:hover': {
+                            color: 'error.main'
+                        }
+                    }}
+                >
+                    <CloseIcon fontSize="small" />
+                </IconButton>
+            </Box>
             <DialogContent dividers>
                 <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
                     <Tabs value={tabValue} onChange={handleTabChange}>
@@ -479,10 +734,23 @@ export const RequestModal: React.FC<RequestModalProps> = ({
                             {(request.tags && getDataVersion(request.tags) === 'decrypted') ? 'Decrypted' : 'Raw'} Data
                         </Typography>
                     </Box>
-                    <Box sx={{ bgcolor: 'background.paper', p: 2, borderRadius: 1, mb: 2 }}>
-                        <pre style={{ margin: 0, overflow: 'auto' }}>
-                            {formatData('request_headers')}
-                        </pre>
+                    <Box sx={{ bgcolor: 'background.paper', borderRadius: 1, height: '200px', mb: 2 }}>
+                        <Editor
+                            height="200px"
+                            defaultLanguage="json"
+                            theme="vs-dark"
+                            value={formatHeaders(editedRequest.headers)}
+                            onChange={(value) => setEditedRequest({
+                                ...editedRequest,
+                                headers: value || ''
+                            })}
+                            options={{
+                                minimap: { enabled: false },
+                                scrollBeyondLastLine: false,
+                                automaticLayout: true,
+                                readOnly: false
+                            }}
+                        />
                     </Box>
 
                     {request.request_body && (
@@ -493,10 +761,23 @@ export const RequestModal: React.FC<RequestModalProps> = ({
                                     {(request.tags && getDataVersion(request.tags) === 'decrypted') ? 'Decrypted' : 'Raw'} Data
                                 </Typography>
                             </Box>
-                            <Box sx={{ bgcolor: 'background.paper', p: 2, borderRadius: 1 }}>
-                                <pre style={{ margin: 0, overflow: 'auto' }}>
-                                    {formatData('request')}
-                                </pre>
+                            <Box sx={{ bgcolor: 'background.paper', borderRadius: 1, height: '300px' }}>
+                                <Editor
+                                    height="300px"
+                                    defaultLanguage="html"
+                                    theme="vs-dark"
+                                    value={editedRequest.body || formatData('request')}
+                                    onChange={(value) => setEditedRequest({
+                                        ...editedRequest,
+                                        body: value || ''
+                                    })}
+                                    options={{
+                                        minimap: { enabled: false },
+                                        scrollBeyondLastLine: false,
+                                        automaticLayout: true,
+                                        readOnly: false
+                                    }}
+                                />
                             </Box>
                         </>
                     )}
@@ -509,10 +790,22 @@ export const RequestModal: React.FC<RequestModalProps> = ({
                             {(request.tags && getDataVersion(request.tags) === 'decrypted') ? 'Decrypted' : 'Raw'} Data
                         </Typography>
                     </Box>
-                    <Box sx={{ bgcolor: 'background.paper', p: 2, borderRadius: 1, mb: 2 }}>
-                        <pre style={{ margin: 0, overflow: 'auto' }}>
-                            {formatData('response_headers')}
-                        </pre>
+                    <Box sx={{ bgcolor: 'background.paper', borderRadius: 1, height: '200px', mb: 2 }}>
+                        <Editor
+                            height="200px"
+                            defaultLanguage="json"
+                            theme="vs-dark"
+                            value={typeof editedResponse.headers === 'string' ?
+                                editedResponse.headers :
+                                JSON.stringify(editedResponse.headers, null, 2)
+                            }
+                            options={{
+                                minimap: { enabled: false },
+                                scrollBeyondLastLine: false,
+                                automaticLayout: true,
+                                readOnly: true
+                            }}
+                        />
                     </Box>
 
                     {request.response_body && (
@@ -523,10 +816,19 @@ export const RequestModal: React.FC<RequestModalProps> = ({
                                     {(request.tags && getDataVersion(request.tags) === 'decrypted') ? 'Decrypted' : 'Raw'} Data
                                 </Typography>
                             </Box>
-                            <Box sx={{ bgcolor: 'background.paper', p: 2, borderRadius: 1 }}>
-                                <pre style={{ margin: 0, overflow: 'auto' }}>
-                                    {formatData('response')}
-                                </pre>
+                            <Box sx={{ bgcolor: 'background.paper', borderRadius: 1, height: '300px' }}>
+                                <Editor
+                                    height="300px"
+                                    defaultLanguage="html"
+                                    theme="vs-dark"
+                                    value={editedResponse.body || formatData('response')}
+                                    options={{
+                                        minimap: { enabled: false },
+                                        scrollBeyondLastLine: false,
+                                        automaticLayout: true,
+                                        readOnly: true
+                                    }}
+                                />
                             </Box>
                         </>
                     )}
@@ -540,10 +842,39 @@ export const RequestModal: React.FC<RequestModalProps> = ({
                     {request.notes || ''}
                 </pre>
             </DialogContent>
-            <DialogActions sx={{ justifyContent: 'flex-start', py: 1, px: 2 }}>
+            <DialogActions sx={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                py: 1,
+                px: 2
+            }}>
                 <Typography variant="caption" color="text.secondary">
                     ID: {request.id}
                 </Typography>
+                <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+                    {resendError && (
+                        <Typography variant="caption" color="error">
+                            Failed to resend request
+                        </Typography>
+                    )}
+                    <Tooltip title="Resend Request">
+                        <span>
+                            <IconButton
+                                onClick={handleResend}
+                                disabled={isResending}
+                                color="primary"
+                                size="small"
+                            >
+                                {isResending ? (
+                                    <CircularProgress size={20} />
+                                ) : (
+                                    <ReplayIcon />
+                                )}
+                            </IconButton>
+                        </span>
+                    </Tooltip>
+                </Box>
             </DialogActions>
         </Dialog>
     );

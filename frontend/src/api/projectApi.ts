@@ -1,8 +1,7 @@
 import { Project, CreateProjectData, UpdateProjectData, ProjectCollaborator, AddCollaboratorData } from '../types/project';
-import { API_BASE_URL } from '../config';
 
 export class ProjectApi {
-    private baseUrl = `${API_BASE_URL}/api/projects`;
+    private baseUrl = 'http://localhost:8000/api/projects';
 
     async createProject(data: CreateProjectData): Promise<Project> {
         const response = await fetch(this.baseUrl, {

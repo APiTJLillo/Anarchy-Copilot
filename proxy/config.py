@@ -79,10 +79,17 @@ class ProxyConfig:
 
     @classmethod
     def from_dict(cls, config_dict: dict) -> 'ProxyConfig':
-        """Create config from dictionary."""
+        """Create config from dictionary, handling both snake_case and camelCase."""
+        # Convert camelCase to snake_case
+        converted_dict = {}
+        for key, value in config_dict.items():
+            # Convert camelCase to snake_case (e.g., interceptRequests -> intercept_requests)
+            snake_key = ''.join(['_' + c.lower() if c.isupper() else c.lower() for c in key]).lstrip('_')
+            converted_dict[snake_key] = value
+
         # Only include keys that match our fields
         filtered_dict = {
-            k: v for k, v in config_dict.items()
+            k: v for k, v in converted_dict.items()
             if k in cls.__dataclass_fields__
         }
         return cls(**filtered_dict)

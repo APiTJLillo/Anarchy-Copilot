@@ -17,6 +17,7 @@ from uvicorn.protocols.http.h11_impl import H11Protocol as BaseH11Protocol
 from sqlalchemy import text, select
 import h11
 from typing import Dict, List, Optional, Any, Tuple, Callable, TYPE_CHECKING
+from h11 import Request, Response
 
 from database import AsyncSessionLocal
 from api.proxy.database_models import ProxyHistoryEntry
@@ -546,39 +547,50 @@ class TunnelProtocol(H11Protocol):
             self.conn = h11.Connection(h11.SERVER)
             logger.debug(f"[{self._connection_id}] Switched to tunnel mode")
 
-    async def _create_history_entry(self, host: str, port: int) -> None:
-        """Create a history entry for this connection."""
+    async def _create_history_entry(self, request: Request, response: Response, duration: float) -> None:
+        """Create a history entry for this request/response pair."""
         try:
-            if self._connection_id in self._active_connections:
-                conn_info = self._active_connections[self._connection_id]
-                session_id = conn_info.get("session_id")
+            # Extract request data
+            method = request.method.decode()
+            url = request.url.decode()
+            host = request.headers.get(b"host", b"").decode()
+            path = request.path.decode()
+            
+            # Convert headers to dict
+            request_headers = {}
+            for name, value in request.headers.items():
+                request_headers[name.decode()] = value.decode()
                 
-                if session_id:
-                    async with AsyncSessionLocal() as db:
-                        history_entry = ProxyHistoryEntry(
-                            session_id=session_id,
-                            timestamp=datetime.utcnow(),
-                            method="CONNECT",
-                            url=f"{host}:{port}",
-                            request_headers=self._connect_headers,
-                            request_body=None,
-                            response_status=200,
-                            response_headers={"Connection": "Upgrade"},
-                            response_body=None,
-                            duration=0,  # Will be updated when connection closes
-                            is_intercepted=False,
-                            tags=[],
-                            notes=None
-                        )
-                        db.add(history_entry)
-                        await db.commit()
-                        await db.refresh(history_entry)
-                        self._history_entry_id = history_entry.id
-                        logger.debug(f"[{self._connection_id}] Created history entry {history_entry.id}")
-                else:
-                    logger.warning(f"[{self._connection_id}] No active session found for connection")
+            response_headers = {}
+            for name, value in response.headers.items():
+                response_headers[name.decode()] = value.decode()
+            
+            # Create history entry
+            from api.proxy.history import create_history_entry
+            from api.proxy.database import get_session
+            
+            async with get_session() as db:
+                await create_history_entry(
+                    db=db,
+                    session_id=self.session_id,
+                    method=method,
+                    url=url,
+                    host=host,
+                    path=path,
+                    request_headers=request_headers,
+                    request_body=request.content.decode() if request.content else None,
+                    response_headers=response_headers,
+                    response_body=response.content.decode() if response.content else None,
+                    status_code=response.status_code,
+                    duration=duration,
+                    is_intercepted=self.intercept_requests or self.intercept_responses,
+                    is_encrypted=False,  # TODO: Implement TLS detection
+                    tags=[],  # TODO: Implement tagging
+                    notes=None
+                )
+                
         except Exception as e:
-            logger.error(f"[{self._connection_id}] Failed to create history entry: {e}")
+            logger.error(f"Failed to create history entry: {e}")
 
     async def _update_history_duration(self) -> None:
         """Update the duration of the history entry."""

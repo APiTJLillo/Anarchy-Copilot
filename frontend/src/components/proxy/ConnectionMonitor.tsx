@@ -19,7 +19,7 @@ import {
     Language as WebIcon,
     ArrowRightAlt,
 } from '@mui/icons-material';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { WS_ENDPOINT } from '../../config';
 
@@ -124,26 +124,41 @@ const ConnectionCard: React.FC<{ connection: Connection }> = ({ connection }) =>
 
 const ConnectionMonitor: React.FC = () => {
     const [connections, setConnections] = useState<Connection[]>([]);
-    const { isConnected, error } = useWebSocket(WS_ENDPOINT, {
-        onMessage: (data) => {
-            if (data.type === 'connection_update') {
-                setConnections(prev => {
-                    const updated = [...prev];
-                    const index = updated.findIndex(c => c.id === data.data.id);
-                    if (index >= 0) {
-                        updated[index] = data.data;
-                    } else {
-                        updated.push(data.data);
-                    }
-                    // Sort by most recent activity
-                    return updated.sort((a, b) => {
-                        const aTime = a.events[a.events.length - 1]?.timestamp || 0;
-                        const bTime = b.events[b.events.length - 1]?.timestamp || 0;
-                        return bTime - aTime;
+    // Sort connections by most recent activity
+    const sortByLatestActivity = useCallback((connections: Connection[]) => {
+        return [...connections].sort((a, b) => {
+            const aTime = a.events[a.events.length - 1]?.timestamp || 0;
+            const bTime = b.events[b.events.length - 1]?.timestamp || 0;
+            return bTime - aTime;
+        });
+    }, []);
+
+    // WebSocket message types
+    type ConnectionMonitorMessage = 
+        | { type: 'connection_update'; data: Connection }
+        | { type: 'connection_closed'; data: { id: string } };
+
+    // WebSocket connection with type-safe messages
+    const { isConnected, error } = useWebSocket<ConnectionMonitorMessage>(WS_ENDPOINT, {
+        onMessage: (message) => {
+            switch (message.type) {
+                case 'connection_update': {
+                    setConnections(prev => {
+                        const connectionIndex = prev.findIndex(c => c.id === message.data.id);
+                        if (connectionIndex === -1) {
+                            // Add new connection and sort
+                            return sortByLatestActivity([...prev, message.data]);
+                        }
+                        // Update existing connection and sort
+                        const updated = [...prev];
+                        updated[connectionIndex] = message.data;
+                        return sortByLatestActivity(updated);
                     });
-                });
-            } else if (data.type === 'connection_closed') {
-                setConnections(prev => prev.filter(c => c.id !== data.data.id));
+                    break;
+                }
+                case 'connection_closed':
+                    setConnections(prev => prev.filter(c => c.id !== message.data.id));
+                    break;
             }
         }
     });

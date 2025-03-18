@@ -1,115 +1,23 @@
 """WebSocket endpoints for proxy connection monitoring."""
-from typing import List
-from fastapi import WebSocket, WebSocketDisconnect, APIRouter
+from typing import List, Dict, Any, Optional
+from fastapi import WebSocket, WebSocketDisconnect, APIRouter, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from database.session import get_db
 from .models import ConnectionInfo
+from .endpoints import get_history
 import asyncio
 import logging
-from proxy.server.state import proxy_state, ConnectionEventBroadcaster
+from proxy.server.state import proxy_state
+from .database_models import ProxySession, ProxyHistoryEntry
+from .history import get_history_entries
+from .connection import connection_manager
 
 logger = logging.getLogger("proxy.core")
 
-# Create router
+# Create router with prefix
 router = APIRouter()
 
-class ConnectionManager(ConnectionEventBroadcaster):
-    def __init__(self):
-        self.active_connections: List[WebSocket] = []
-        self._lock = asyncio.Lock()
-        # Register as the event broadcaster
-        proxy_state.set_event_broadcaster(self)
-
-    async def connect(self, websocket: WebSocket):
-        try:
-            # Accept the connection first
-            await websocket.accept()
-            logger.debug("WebSocket connection accepted")
-
-            # Add to active connections under lock
-            async with self._lock:
-                self.active_connections.append(websocket)
-            
-            # Send initial state
-            try:
-                connections = await proxy_state.get_all_connections()
-                # Send an initial message first to verify connection
-                await websocket.send_json({"type": "connected", "status": "ok"})
-                
-                # Then send the actual state
-                if connections:
-                    for conn_id, conn_data in connections.items():
-                        if websocket.client_state.value == 1:  # Check if still connected
-                            await websocket.send_json({
-                                "type": "connection_update",
-                                "data": {
-                                    "id": conn_id,
-                                    **conn_data
-                                }
-                            })
-                else:
-                    if websocket.client_state.value == 1:  # Check if still connected
-                        await websocket.send_json({
-                            "type": "initial_state",
-                            "data": {"connections": {}}
-                        })
-                logger.debug("Sent initial state to WebSocket client")
-            except Exception as e:
-                logger.error(f"Failed to send initial state: {e}")
-                # Don't raise here, just log the error
-                
-        except Exception as e:
-            logger.error(f"Failed to establish WebSocket connection: {e}")
-            try:
-                await websocket.close()
-            except:
-                pass
-            raise
-
-    async def disconnect(self, websocket: WebSocket):
-        async with self._lock:
-            if websocket in self.active_connections:
-                self.active_connections.remove(websocket)
-                logger.debug("WebSocket connection removed from active connections")
-
-    async def broadcast_connection_update(self, connection: ConnectionInfo):
-        """Broadcast connection updates to all connected clients."""
-        message = {
-            "type": "connection_update",
-            "data": connection
-        }
-        await self._broadcast(message)
-
-    async def broadcast_connection_closed(self, connection_id: str):
-        """Broadcast when a connection is closed."""
-        message = {
-            "type": "connection_closed",
-            "data": {"id": connection_id}
-        }
-        await self._broadcast(message)
-
-    async def _broadcast(self, message: dict):
-        """Helper method to broadcast messages with error handling."""
-        async with self._lock:
-            dead_connections = []
-            for connection in self.active_connections:
-                try:
-                    if connection.client_state.value == 1:  # Only send if connection is open
-                        await connection.send_json(message)
-                except Exception as e:
-                    logger.error(f"Failed to send message to WebSocket client: {e}")
-                    dead_connections.append(connection)
-            
-            # Cleanup dead connections
-            for dead in dead_connections:
-                if dead in self.active_connections:
-                    self.active_connections.remove(dead)
-                    try:
-                        await dead.close()
-                    except:
-                        pass
-
-connection_manager = ConnectionManager()
-
-async def handle_proxy_connection_updates(websocket: WebSocket):
+async def handle_proxy_connection_updates(websocket: WebSocket, db: AsyncSession):
     """Handle WebSocket connections for proxy connection updates."""
     try:
         await connection_manager.connect(websocket)
@@ -123,9 +31,27 @@ async def handle_proxy_connection_updates(websocket: WebSocket):
                 if websocket.client_state.value == 1:
                     # Send current state
                     connections = await proxy_state.get_all_connections()
+                    history_entries = await get_history(limit=100, db=db)
+                    
+                    # Convert snake_case to camelCase for frontend
+                    formatted_connections = {
+                        conn_id: {
+                            "id": conn_id,
+                            "interceptRequests": conn_data.get("intercept_requests", True),
+                            "interceptResponses": conn_data.get("intercept_responses", True),
+                            "allowedHosts": conn_data.get("allowed_hosts", []),
+                            "excludedHosts": conn_data.get("excluded_hosts", []),
+                            **{k: v for k, v in conn_data.items() if k not in ["intercept_requests", "intercept_responses", "allowed_hosts", "excluded_hosts"]}
+                        }
+                        for conn_id, conn_data in connections.items()
+                    }
+                    
                     await websocket.send_json({
-                        "type": "state_update",
-                        "data": {"connections": connections}
+                        "type": "stateUpdate",
+                        "data": {
+                            "connections": formatted_connections,
+                            "history": history_entries
+                        }
                     })
                 
             except WebSocketDisconnect:
@@ -140,15 +66,95 @@ async def handle_proxy_connection_updates(websocket: WebSocket):
         
     finally:
         # Always ensure we clean up
-        await connection_manager.disconnect(websocket)
+        connection_manager.disconnect(websocket)
         try:
             if websocket.client_state.value == 1:
                 await websocket.close()
         except:
             pass
 
-# Add the WebSocket endpoint to the router
-@router.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
+# Add the WebSocket endpoints to the router
+@router.websocket("/proxy")
+async def proxy_endpoint(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
     """WebSocket endpoint for real-time connection updates."""
-    await handle_proxy_connection_updates(websocket)
+    await handle_proxy_connection_updates(websocket, db)
+
+@router.websocket("/intercept")
+async def intercept_endpoint(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
+    """WebSocket endpoint for real-time interception."""
+    await handle_proxy_connection_updates(websocket, db)
+
+@router.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
+    """WebSocket endpoint for general proxy updates."""
+    await connection_manager.connect(websocket)
+    try:
+        # Get initial history
+        history_entries = await get_history_entries(db)
+        history_data = []
+        for entry in history_entries:
+            history_data.append({
+                "id": entry.id,
+                "timestamp": entry.timestamp.isoformat(),
+                "method": entry.method,
+                "url": entry.url,
+                "host": entry.host,
+                "path": entry.path,
+                "status_code": entry.status_code,
+                "response_status": entry.status_code,
+                "duration": entry.duration,
+                "is_intercepted": entry.is_intercepted,
+                "is_encrypted": entry.is_encrypted,
+                "tags": entry.tags or [],
+                "notes": entry.notes,
+                "request_headers": entry.request_headers,
+                "request_body": entry.request_body,
+                "response_headers": entry.response_headers,
+                "response_body": entry.response_body,
+                "raw_request": entry.request_body,
+                "raw_response": entry.response_body,
+                "decrypted_request": entry.decrypted_request,
+                "decrypted_response": entry.decrypted_response,
+                "applied_rules": None,
+                "session_id": entry.session_id
+            })
+
+        # Send initial state
+        initial_state = {
+            "type": "initial_data",
+            "data": {
+                "wsConnected": True,
+                "interceptRequests": False,
+                "interceptResponses": False,
+                "history": history_data
+            }
+        }
+        await websocket.send_json(initial_state)
+
+        while True:
+            try:
+                # Wait for any client messages
+                data = await websocket.receive_json()
+                # Handle client messages if needed
+            except Exception as e:
+                print(f"Error in websocket: {e}")
+                break
+                
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+    finally:
+        await websocket.close()
+
+@router.websocket("/ws/intercept")
+async def ws_intercept_endpoint(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
+    """WebSocket endpoint for interception updates."""
+    await connection_manager.connect(websocket)
+    try:
+        while True:
+            data = await websocket.receive_json()
+            # Handle intercept messages
+            await connection_manager.broadcast_message(data)
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+    finally:
+        connection_manager.disconnect(websocket)

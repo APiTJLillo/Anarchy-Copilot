@@ -1,8 +1,9 @@
 """WebSocket API endpoints."""
-from typing import Dict, Any, List
-from fastapi import APIRouter, HTTPException
+from typing import Dict, Any, List, Optional
+from fastapi import APIRouter, HTTPException, WebSocket
 from proxy.websocket.manager import WebSocketManager
 from proxy.websocket.interceptor import SecurityInterceptor, DebugInterceptor
+from proxy.version import get_version_info
 
 router = APIRouter(tags=["websocket"])
 ws_manager = WebSocketManager()
@@ -13,9 +14,43 @@ security_interceptor = SecurityInterceptor()
 ws_manager.add_interceptor(debug_interceptor)
 ws_manager.add_interceptor(security_interceptor)
 
+@router.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """Main WebSocket endpoint for real-time updates."""
+    await websocket.accept()
+    try:
+        # Send initial data
+        initial_data = {
+            "type": "initial_data",
+            "data": {
+                "version": get_version_info(),
+                "connections": ws_manager.get_active_connections(),
+                "history": [],  # Will be populated per connection
+                "analysis": []  # Will be populated per connection
+            }
+        }
+        await websocket.send_json(initial_data)
+        
+        # Keep connection alive and handle updates
+        while True:
+            try:
+                # Wait for any client messages
+                data = await websocket.receive_json()
+                # Handle client messages if needed
+            except Exception as e:
+                print(f"Error in websocket: {e}")
+                break
+                
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+    finally:
+        await websocket.close()
+
 @router.get("/connections")
 async def get_websocket_connections() -> List[Dict[str, Any]]:
-    """Get list of active WebSocket connections."""
+    """Get list of active WebSocket connections with initial data."""
+    # Get version info for initial data
+    version_info = get_version_info()
     connections = []
     for conv_id in ws_manager.active_sessions:
         conv = ws_manager.get_conversation(conv_id)

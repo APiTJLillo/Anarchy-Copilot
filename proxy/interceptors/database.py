@@ -350,18 +350,15 @@ class DatabaseInterceptor(ProxyInterceptor):
                 # Get body if present
                 body = b'\r\n'.join(request_lines[i+1:]) if i+1 < len(request_lines) else None
                 
-                # Process body
-                raw_body, decrypted_body = self._process_body(data, headers, True)
-                
-                # Store request
+                # Store request with both raw and decrypted data
                 entry = {
                     "session_id": session_id,
                     "timestamp": datetime.utcnow(),
                     "method": method,
                     "url": path,
                     "request_headers": json.dumps(headers),
-                    "request_body": raw_body,
-                    "decrypted_request": decrypted_body,
+                    "request_body": base64.b64encode(data).decode('utf-8'),  # Store raw data base64 encoded
+                    "decrypted_request": data.decode('utf-8', errors='replace'),  # Store decrypted data as text
                     "tags": json.dumps(["request", "decrypted"]),
                     "is_intercepted": True,
                     "is_encrypted": True
@@ -424,17 +421,14 @@ class DatabaseInterceptor(ProxyInterceptor):
                     
                 # Get body if present
                 body = b'\r\n'.join(response_lines[i+1:]) if i+1 < len(response_lines) else None
-                
-                # Process body
-                raw_body, decrypted_body = self._process_body(data, headers, True)
 
-                # Update history entry
+                # Update history entry with both raw and decrypted data
                 update_data = {
                     "id": self._last_request_id,
                     "status_code": status_code,
                     "response_headers": json.dumps(headers),
-                    "response_body": raw_body,
-                    "decrypted_response": decrypted_body,
+                    "response_body": base64.b64encode(data).decode('utf-8'),  # Store raw data base64 encoded
+                    "decrypted_response": data.decode('utf-8', errors='replace'),  # Store decrypted data as text
                     "tags": json.dumps(["request", "response", "decrypted"])
                 }
 
@@ -442,8 +436,8 @@ class DatabaseInterceptor(ProxyInterceptor):
                     async with db.begin():
                         await db.execute(
                             text("""
-                                UPDATE proxy_history 
-                                SET status_code = :status_code,
+                                UPDATE proxy_history SET
+                                    status_code = :status_code,
                                     response_headers = :response_headers,
                                     response_body = :response_body,
                                     decrypted_response = :decrypted_response,
@@ -453,12 +447,12 @@ class DatabaseInterceptor(ProxyInterceptor):
                             update_data
                         )
                         logger.debug(f"[{self._connection_id}] Updated history entry {self._last_request_id} with decrypted response")
-                        
+
             except Exception as e:
                 logger.error(f"[{self._connection_id}] Failed to parse HTTP response: {e}")
                 # Store as raw data
                 await self.store_raw_data("target->client", data, True)
-                
+
         except Exception as e:
             logger.error(f"[{self._connection_id}] Error storing response: {e}")
 

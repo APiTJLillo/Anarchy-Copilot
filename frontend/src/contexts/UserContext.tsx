@@ -1,91 +1,90 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
-import proxyApi from '../api/proxyApi';
-
-export interface User {
-    id: number;
-    username: string;
-    email: string;
-}
-
-interface Project {
-    id: number;
-    name: string;
-}
+import { useProxyApi } from '../api/proxyApi';
+import type { User, Project } from '../api/proxyApi';
 
 interface UserContextType {
-    currentUser: User | null;
-    setCurrentUser: (user: User | null) => void;
     users: User[];
     projects: Project[];
+    currentUser: User | null;
+    setCurrentUser: (user: User | null) => void;
     loadingUsers: boolean;
     loadingProjects: boolean;
     error: string | null;
 }
 
-const UserContext = createContext<UserContextType | null>(null);
+const UserContext = createContext<UserContextType>({
+    users: [],
+    projects: [],
+    currentUser: null,
+    setCurrentUser: () => { },
+    loadingUsers: true,
+    loadingProjects: true,
+    error: null
+});
 
 export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-    const [currentUser, setCurrentUser] = useState<User | null>(null);
     const [users, setUsers] = useState<User[]>([]);
     const [projects, setProjects] = useState<Project[]>([]);
+    const [currentUser, setCurrentUser] = useState<User | null>(null);
     const [loadingUsers, setLoadingUsers] = useState(true);
     const [loadingProjects, setLoadingProjects] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const proxyApi = useProxyApi();
 
     useEffect(() => {
-        const fetchUsers = async () => {
+        let mounted = true;
+        let timeoutId: NodeJS.Timeout | null = null;
+
+        async function fetchData() {
+            if (!mounted) return;
+
             try {
-                const data = await proxyApi.getUsers();
-                setUsers(data);
-                // Set first user as current if none selected
-                if (!currentUser && data.length > 0) {
-                    setCurrentUser(data[0]);
+                const [userData, projectData] = await Promise.all([
+                    proxyApi.getUsers(),
+                    proxyApi.getProjects()
+                ]);
+
+                if (!mounted) return;
+
+                setUsers(userData);
+                if (!currentUser && userData.length > 0) {
+                    setCurrentUser(userData[0]);
                 }
-            } catch (err) {
-                setError('Failed to load users');
-                console.error(err);
-            } finally {
+                setProjects(projectData);
                 setLoadingUsers(false);
-            }
-        };
-
-        const fetchProjects = async () => {
-            try {
-                const data = await proxyApi.getProjects();
-                setProjects(data);
-            } catch (err) {
-                setError('Failed to load projects');
-                console.error(err);
-            } finally {
                 setLoadingProjects(false);
+                setError(null);
+            } catch (err) {
+                if (!mounted) return;
+                console.error('Failed to fetch data:', err);
+                setError('Failed to fetch data');
+            }
+        }
+
+        // Initial fetch
+        fetchData();
+
+        return () => {
+            mounted = false;
+            if (timeoutId) {
+                clearTimeout(timeoutId);
             }
         };
-
-        fetchUsers();
-        fetchProjects();
-    }, []);
+    }, []); // Empty dependency array - only run once on mount
 
     return (
-        <UserContext.Provider
-            value={{
-                currentUser,
-                setCurrentUser,
-                users,
-                projects,
-                loadingUsers,
-                loadingProjects,
-                error
-            }}
-        >
+        <UserContext.Provider value={{
+            users,
+            projects,
+            currentUser,
+            setCurrentUser,
+            loadingUsers,
+            loadingProjects,
+            error
+        }}>
             {children}
         </UserContext.Provider>
     );
 };
 
-export const useUser = () => {
-    const context = useContext(UserContext);
-    if (!context) {
-        throw new Error('useUser must be used within a UserProvider');
-    }
-    return context;
-};
+export const useUser = () => useContext(UserContext);

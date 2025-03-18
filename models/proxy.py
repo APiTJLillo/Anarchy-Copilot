@@ -5,6 +5,7 @@ from api.proxy.database_models import (
     InterceptionRule,
     TunnelMetrics,
     ProxyAnalysisResult,
+    ModifiedRequest,
 )
 
 __all__ = [
@@ -13,4 +14,5 @@ __all__ = [
     'InterceptionRule',
     'TunnelMetrics',
     'ProxyAnalysisResult',
+    'ModifiedRequest',
 ]

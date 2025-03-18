@@ -33,7 +33,8 @@ import {
   Speed as MonitoringIcon,
 } from '@mui/icons-material';
 import { ProjectSelector } from '../projects/ProjectSelector';
-import { UserProvider, useUser, User } from '../../contexts/UserContext';
+import { UserProvider, useUser } from '../../contexts/UserContext';
+import type { User } from '../../api/proxyApi';
 
 const DRAWER_WIDTH = 240;
 

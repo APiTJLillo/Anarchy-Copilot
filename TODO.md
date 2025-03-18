@@ -400,23 +400,44 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
 
    - Develop a dedicated module/service to manage all AI tasks (recon analysis, payload generation, report writing).
    - Abstract model calls to facilitate swapping between API-based models (like GPT-4) and local models.
+   - Support for multiple LLM providers (Anthropic, OpenAI, Azure OpenAI)
+   - Cost tracking and usage monitoring across providers
+   - Fallback configuration for reliability
+   - Rate limiting and quota management
 
 2. **AI Model Management**
 
    - Provide configuration options for API keys or local model loading.
    - Allow adjustments to AI parameters (e.g., temperature, max tokens).
+   - Per-provider configuration storage with encryption in database:
+     - API keys and authentication
+     - Custom base URLs (e.g., for Azure deployments)
+     - Model version selection and validation
+   - Default prompt templates per provider/model
+   - Usage analytics and cost optimization
 
-3. **Context-Aware AI Suggestions**
+3. **AI Workflow System**
+
+   - Visual workflow builder for chaining LLM operations
+   - Conditional branching based on LLM responses
+   - Input/output mapping between workflow steps
+   - Template variables for dynamic content
+   - Workflow versioning and sharing
+   - Integration with existing plugin system
+   - Real-time workflow monitoring and debugging
+   - Export/import of workflow configurations
+
+4. **Context-Aware AI Suggestions**
 
    - Integrate a real-time AI “copilot” or chatbot for context-sensitive advice.
    - Ensure AI suggestions are based on current project and scan data.
 
-4. **Classification & Prioritization**
+5. **Classification & Prioritization**
 
    - Incorporate or fine-tune an ML classifier for vulnerability severity and categorization.
    - Continuously improve AI accuracy based on feedback and historical data.
 
-5. **Advanced Recon/Attack Automation (Optional)**
+6. **Advanced Recon/Attack Automation (Optional)**
    - (Optional) Implement an “AI Attack Mode” that dynamically plans recon and fuzzing steps.
    - Ensure sandboxing and maintain user control over all AI-driven actions.
 

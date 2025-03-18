@@ -266,6 +266,21 @@ def upgrade() -> None:
     )
     op.create_index('ix_proxy_history_session_id', 'proxy_history', ['session_id'], unique=False)
     op.create_index('ix_proxy_history_timestamp', 'proxy_history', ['timestamp'], unique=False)
+    
+    # Create modified_requests table
+    op.create_table(
+        'modified_requests',
+        sa.Column('id', sa.Integer(), nullable=False),
+        sa.Column('original_id', sa.Integer(), nullable=False),
+        sa.Column('modified_method', sa.String(), nullable=True),
+        sa.Column('modified_url', sa.String(), nullable=True),
+        sa.Column('modified_headers', sqlite.JSON(), nullable=True),
+        sa.Column('modified_body', sa.Text(), nullable=True),
+        sa.Column('created_at', sa.DateTime(), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
+        sa.ForeignKeyConstraint(['original_id'], ['proxy_history.id'], ondelete='CASCADE'),
+        sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index('ix_modified_requests_original_id', 'modified_requests', ['original_id'], unique=False)
 
     # Create tunnel_metrics table
     op.create_table(
@@ -306,6 +321,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_table('proxy_analysis_results')
     op.drop_table('tunnel_metrics')
+    op.drop_table('modified_requests')  # Add this table to be dropped
     op.drop_table('proxy_history')
     op.drop_table('interception_rules')
     op.drop_table('proxy_sessions')

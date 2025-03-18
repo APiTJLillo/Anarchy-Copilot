@@ -3,16 +3,17 @@ import { Box, Button, Dialog, Stack } from '@mui/material';
 import AddIcon from '@mui/icons-material/Add';
 import RuleEditor from './RuleEditor';
 import RuleList from './RuleList';
-import proxyApi, { InterceptionRule, CreateRuleRequest } from '../../api/proxyApi';
+import { CreateRuleRequest, InterceptionRule, useProxyApi } from '../../api/proxyApi';
 
 interface InterceptionRuleManagerProps {
     sessionId: number;
 }
 
-const InterceptionRuleManager: React.FC<InterceptionRuleManagerProps> = ({ sessionId }) => {
+export const InterceptionRuleManager: React.FC<InterceptionRuleManagerProps> = ({ sessionId }) => {
     const [rules, setRules] = useState<InterceptionRule[]>([]);
     const [isEditorOpen, setIsEditorOpen] = useState(false);
     const [editingRule, setEditingRule] = useState<InterceptionRule | null>(null);
+    const proxyApi = useProxyApi();
 
     const loadRules = async () => {
         try {
@@ -37,7 +38,7 @@ const InterceptionRuleManager: React.FC<InterceptionRuleManagerProps> = ({ sessi
         }
     };
 
-    const handleUpdateRule = async (rule: CreateRuleRequest) => {
+    const handleUpdateRule = async (rule: Partial<CreateRuleRequest>) => {
         try {
             if (!editingRule) return;
             await proxyApi.updateRule(sessionId, editingRule.id, rule);

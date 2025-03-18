@@ -15,10 +15,12 @@ import {
     IconButton,
     Chip,
     ButtonGroup,
+    CircularProgress,
 } from '@mui/material';
 import { Send as SendIcon, Delete as DeleteIcon, Security as SecurityIcon } from '@mui/icons-material';
-import { API_BASE_URL } from '../../config';
 import axios from 'axios';
+import { useWebSocket } from '../../hooks/useWebSocket';
+import { WS_ENDPOINT } from '../../config';
 
 interface WebSocketMessage {
     id: string;
@@ -71,39 +73,49 @@ export const WebSocketView: React.FC = () => {
     const [messageInput, setMessageInput] = useState('');
     const [selectedSecurityIssues, setSelectedSecurityIssues] = useState<WebSocketMessage['securityIssues']>(undefined);
     const [securityReport, setSecurityReport] = useState<SecurityReport | null>(null);
+    const [loading, setLoading] = useState(true);
 
-    const fetchConnections = useCallback(async () => {
-        try {
-            const response = await axios.get<WebSocketConnection[]>(`${API_BASE_URL}/api/proxy/websocket/connections`);
-            setConnections(response.data);
-        } catch (err) {
-            console.error('Failed to fetch WebSocket connections:', err);
-        }
-    }, []);
+    // Handle real-time WebSocket messages
+    interface WSConnectionListMessage {
+        type: 'connection_list';
+        data: WebSocketConnection[];
+    }
 
-    const fetchMessages = useCallback(async (connectionId: string) => {
-        try {
-            const [messagesResponse, reportResponse] = await Promise.all([
-                axios.get<WebSocketMessage[]>(`${API_BASE_URL}/api/proxy/websocket/messages/${connectionId}`),
-                axios.get<SecurityReport>(`${API_BASE_URL}/api/proxy/websocket/security/report/${connectionId}`)
-            ]);
-            setMessages(messagesResponse.data);
-            setSecurityReport(reportResponse.data);
-        } catch (err) {
-            console.error('Failed to fetch WebSocket data:', err);
+    interface WSConnectionMessagesMessage {
+        type: 'connection_messages';
+        data: {
+            connectionId: string;
+            messages: WebSocketMessage[];
+            securityReport?: SecurityReport;
+        };
+    }
+
+    type WSMessage = WSConnectionListMessage | WSConnectionMessagesMessage;
+
+    const { isConnected, error, send } = useWebSocket<WSMessage>(WS_ENDPOINT, {
+        onMessage: (data: WSMessage) => {
+            if (data.type === 'connection_list') {
+                setConnections(data.data);
+                setLoading(false);
+            } else if (data.type === 'connection_messages' && selectedConnection && data.data.connectionId === selectedConnection) {
+                setMessages(data.data.messages);
+                if (data.data.securityReport) {
+                    setSecurityReport(data.data.securityReport);
+                }
+            }
         }
-    }, []);
+    });
 
     const sendMessage = async () => {
         if (!selectedConnection || !messageInput.trim()) return;
 
         try {
-            await axios.post(`${API_BASE_URL}/api/proxy/websocket/send`, {
+            await axios.post('/api/proxy/websocket/send', {
                 connectionId: selectedConnection,
                 message: messageInput
             });
             setMessageInput('');
-            fetchMessages(selectedConnection);
+            // Message updates will come through WebSocket
         } catch (err) {
             console.error('Failed to send message:', err);
         }
@@ -120,8 +132,8 @@ export const WebSocketView: React.FC = () => {
                 securityAnalysisEnabled: feature === 'securityAnalysis' ? !connection.securityAnalysisEnabled : connection.securityAnalysisEnabled
             };
 
-            await axios.post(`${API_BASE_URL}/api/proxy/websocket/config/${connectionId}`, config);
-            fetchConnections();
+            await axios.post(`/api/proxy/websocket/config/${connectionId}`, config);
+            // Updates will come through WebSocket
         } catch (err) {
             console.error('Failed to toggle feature:', err);
         }
@@ -129,31 +141,49 @@ export const WebSocketView: React.FC = () => {
 
     const closeConnection = async (connectionId: string) => {
         try {
-            await axios.post(`${API_BASE_URL}/api/proxy/websocket/close/${connectionId}`);
-            fetchConnections();
+            await axios.post(`/api/proxy/websocket/close/${connectionId}`);
             if (selectedConnection === connectionId) {
                 setSelectedConnection(null);
                 setMessages([]);
                 setSecurityReport(null);
             }
+            // Connection list update will come through WebSocket
         } catch (err) {
             console.error('Failed to close connection:', err);
         }
     };
 
-    useEffect(() => {
-        fetchConnections();
-        const intervalId = setInterval(fetchConnections, 5000);
-        return () => clearInterval(intervalId);
-    }, [fetchConnections]);
+    // Initial data loading is not needed as it will come through WebSocket
 
-    useEffect(() => {
-        if (selectedConnection) {
-            fetchMessages(selectedConnection);
-            const intervalId = setInterval(() => fetchMessages(selectedConnection), 1000);
-            return () => clearInterval(intervalId);
-        }
-    }, [selectedConnection, fetchMessages]);
+    // Show loading state while WebSocket connects
+    if (!isConnected) {
+        return (
+            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '70vh' }}>
+                <Paper sx={{ p: 3, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                    <CircularProgress />
+                    <Typography color="textSecondary">
+                        Connecting to WebSocket server...
+                    </Typography>
+                </Paper>
+            </Box>
+        );
+    }
+
+    // Show error state
+    if (error) {
+        return (
+            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '70vh' }}>
+                <Paper sx={{ p: 3, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
+                    <Typography color="error" variant="h6">
+                        Connection Error
+                    </Typography>
+                    <Typography color="textSecondary">
+                        Failed to connect to WebSocket server. Please try again later.
+                    </Typography>
+                </Paper>
+            </Box>
+        );
+    }
 
     return (
         <Grid container spacing={2}>
@@ -163,49 +193,53 @@ export const WebSocketView: React.FC = () => {
                     <Typography variant="h6" gutterBottom>
                         WebSocket Connections
                     </Typography>
-                    <List>
-                        {connections.map((conn) => (
-                            <ListItem
-                                key={conn.id}
-                                onClick={() => setSelectedConnection(conn.id)}
-                                sx={{
-                                    cursor: 'pointer',
-                                    bgcolor: selectedConnection === conn.id ? 'action.selected' : 'inherit'
-                                }}
-                                secondaryAction={
-                                    conn.status === 'ACTIVE' && (
-                                        <IconButton edge="end" onClick={() => closeConnection(conn.id)}>
-                                            <DeleteIcon />
-                                        </IconButton>
-                                    )
-                                }
-                            >
-                                <ListItemText
-                                    primary={conn.url}
-                                    secondary={
-                                        <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
-                                            <Chip
-                                                size="small"
-                                                label={conn.status}
-                                                color={conn.status === 'ACTIVE' ? 'success' : 'default'}
-                                            />
-                                            {conn.securityAnalysisEnabled && (
+                    {loading ? (
+                        <CircularProgress />
+                    ) : (
+                        <List>
+                            {connections.map(conn => (
+                                <ListItem
+                                    key={conn.id}
+                                    onClick={() => setSelectedConnection(conn.id)}
+                                    sx={{
+                                        cursor: 'pointer',
+                                        bgcolor: selectedConnection === conn.id ? 'action.selected' : 'inherit'
+                                    }}
+                                    secondaryAction={
+                                        conn.status === 'ACTIVE' && (
+                                            <IconButton edge="end" onClick={() => closeConnection(conn.id)}>
+                                                <DeleteIcon />
+                                            </IconButton>
+                                        )
+                                    }
+                                >
+                                    <ListItemText
+                                        primary={conn.url}
+                                        secondary={
+                                            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap' }}>
                                                 <Chip
                                                     size="small"
-                                                    label="Security Analysis"
-                                                    color="warning"
-                                                    icon={<SecurityIcon />}
+                                                    label={conn.status}
+                                                    color={conn.status === 'ACTIVE' ? 'success' : 'default'}
                                                 />
-                                            )}
-                                            <Typography variant="caption" display="block">
-                                                {new Date(conn.timestamp).toLocaleString()}
-                                            </Typography>
-                                        </Box>
-                                    }
-                                />
-                            </ListItem>
-                        ))}
-                    </List>
+                                                {conn.securityAnalysisEnabled && (
+                                                    <Chip
+                                                        size="small"
+                                                        label="Security Analysis"
+                                                        color="warning"
+                                                        icon={<SecurityIcon />}
+                                                    />
+                                                )}
+                                                <Typography variant="caption" display="block">
+                                                    {new Date(conn.timestamp).toLocaleString()}
+                                                </Typography>
+                                            </Box>
+                                        }
+                                    />
+                                </ListItem>
+                            ))}
+                        </List>
+                    )}
                 </Paper>
             </Grid>
 

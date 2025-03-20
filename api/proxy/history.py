@@ -33,14 +33,32 @@ async def _reconnect_websocket():
                     _session = aiohttp.ClientSession()
                     logger.debug("Created new aiohttp session")
                 
-                logger.debug("Attempting WebSocket connection to ws://dev:8000/api/proxy/ws/internal")
-                _ws = await _session.ws_connect('ws://dev:8000/api/proxy/ws/internal')
+                logger.debug("Attempting WebSocket connection to ws://localhost:8000/api/proxy/ws/internal")
+                logger.debug("Current WebSocket state: _ws=%s, _session=%s", 
+                           "closed" if _ws and _ws.closed else "None" if _ws is None else "open",
+                           "closed" if _session and _session.closed else "None" if _session is None else "open")
+                
+                _ws = await _session.ws_connect('ws://localhost:8000/api/proxy/ws/internal')
                 logger.info("Successfully reconnected to dev container WebSocket")
                 
                 # Send a test message to verify connection
+                logger.debug("Sending test message to verify connection")
                 await _ws.send_json({"type": "test_connection"})
-                logger.debug("Sent test message to verify connection")
-                return True
+                logger.debug("Waiting for test message response...")
+                
+                # Wait for response with timeout
+                try:
+                    response = await asyncio.wait_for(_ws.receive_json(), timeout=5.0)
+                    if response.get("type") == "test_connection_response" and response.get("status") == "ok":
+                        logger.info("Test message successful, connection verified")
+                        return True
+                    else:
+                        logger.error(f"Unexpected test message response: {response}")
+                        raise Exception("Invalid test message response")
+                except asyncio.TimeoutError:
+                    logger.error("Timeout waiting for test message response")
+                    raise Exception("Test message timeout")
+                
         except Exception as e:
             retries += 1
             logger.error(f"Failed to reconnect (attempt {retries}/{_MAX_RETRIES}): {e}")

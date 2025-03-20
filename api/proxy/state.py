@@ -2,6 +2,7 @@
 from typing import Optional
 import asyncio
 import logging
+from .history import ensure_dev_connection
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,12 @@ class ProxyState:
         """Start the proxy."""
         async with self._lock:
             self._running = True
+            # Establish WebSocket connection to dev container
+            try:
+                await ensure_dev_connection()
+                logger.info("Established WebSocket connection to dev container")
+            except Exception as e:
+                logger.error(f"Failed to establish WebSocket connection to dev container: {e}")
             logger.info("Proxy started")
 
     async def stop(self) -> None:

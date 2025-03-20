@@ -77,6 +77,27 @@ interface WebSocketStatusResponse {
         lastMessage: string;
         messageCount: number;
         errorCount: number;
+        active_connections?: Array<{
+            id: string;
+            connected_since: string;
+            last_activity: string;
+            message_count: number;
+            error_count: number;
+            state: string;
+            last_error?: string;
+            last_message_type?: string;
+            connection_history: Array<{
+                timestamp: string;
+                event: string;
+                details: string;
+            }>;
+        }>;
+        connection_history?: Array<{
+            timestamp: string;
+            event: string;
+            connection_id: string;
+            details: string;
+        }>;
     };
     internal: {
         connected: boolean;
@@ -84,6 +105,27 @@ interface WebSocketStatusResponse {
         lastMessage: string;
         messageCount: number;
         errorCount: number;
+        active_connections?: Array<{
+            id: string;
+            connected_since: string;
+            last_activity: string;
+            message_count: number;
+            error_count: number;
+            state: string;
+            last_error?: string;
+            last_message_type?: string;
+            connection_history: Array<{
+                timestamp: string;
+                event: string;
+                details: string;
+            }>;
+        }>;
+        connection_history?: Array<{
+            timestamp: string;
+            event: string;
+            connection_id: string;
+            details: string;
+        }>;
     };
     connections: Connection[];
 }
@@ -549,6 +591,29 @@ const Health: React.FC = () => {
                                                         color={healthState.wsStatus.internal.connected ? 'success' : 'error'}
                                                         sx={{ mt: 1 }}
                                                     />
+                                                    {healthState.wsStatus.internal.active_connections?.map((conn: any) => (
+                                                        <Box key={conn.id} sx={{ mt: 2, textAlign: 'left' }}>
+                                                            <Typography variant="caption" display="block">
+                                                                State: <Chip
+                                                                    size="small"
+                                                                    label={conn.state}
+                                                                    color={conn.state === 'connected' ? 'success' :
+                                                                        conn.state === 'error' ? 'error' : 'warning'}
+                                                                />
+                                                            </Typography>
+                                                            <Typography variant="caption" display="block">
+                                                                Connected since: {formatDate(conn.connected_since)}
+                                                            </Typography>
+                                                            <Typography variant="caption" display="block">
+                                                                Last activity: {formatDate(conn.last_activity)}
+                                                            </Typography>
+                                                            {conn.last_error && (
+                                                                <Typography variant="caption" display="block" color="error">
+                                                                    Last error: {conn.last_error}
+                                                                </Typography>
+                                                            )}
+                                                        </Box>
+                                                    ))}
                                                 </Paper>
                                             </Grid>
                                             <Grid item xs={6}>
@@ -562,6 +627,48 @@ const Health: React.FC = () => {
                                                     <Typography variant="caption" color="text.secondary">
                                                         Errors: {healthState.wsStatus.internal.errorCount}
                                                     </Typography>
+                                                    {healthState.wsStatus.internal.active_connections?.map((conn: any) => (
+                                                        <Box key={conn.id} sx={{ mt: 2, textAlign: 'left' }}>
+                                                            {conn.last_message_type && (
+                                                                <Typography variant="caption" display="block">
+                                                                    Last message type: {conn.last_message_type}
+                                                                </Typography>
+                                                            )}
+                                                        </Box>
+                                                    ))}
+                                                </Paper>
+                                            </Grid>
+                                            {/* Connection History */}
+                                            <Grid item xs={12}>
+                                                <Paper sx={{ p: 2 }}>
+                                                    <Typography variant="subtitle2" gutterBottom>
+                                                        Recent Connection Events
+                                                    </Typography>
+                                                    <Box sx={{ maxHeight: '200px', overflow: 'auto' }}>
+                                                        {healthState.wsStatus.internal.connection_history?.map((event: any, index: number) => (
+                                                            <Box key={index} sx={{
+                                                                py: 1,
+                                                                borderBottom: '1px solid',
+                                                                borderColor: 'divider'
+                                                            }}>
+                                                                <Typography variant="caption" display="block" color="text.secondary">
+                                                                    {formatDate(event.timestamp)}
+                                                                </Typography>
+                                                                <Typography variant="body2">
+                                                                    <Chip
+                                                                        size="small"
+                                                                        label={event.event}
+                                                                        color={event.event === 'connected' ? 'success' :
+                                                                            event.event === 'error' ? 'error' :
+                                                                                event.event === 'disconnected' ? 'warning' :
+                                                                                    'default'}
+                                                                        sx={{ mr: 1 }}
+                                                                    />
+                                                                    {event.details}
+                                                                </Typography>
+                                                            </Box>
+                                                        ))}
+                                                    </Box>
                                                 </Paper>
                                             </Grid>
                                         </Grid>

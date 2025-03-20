@@ -17,6 +17,43 @@ class Connection:
         self.last_activity = datetime.utcnow()
         self.message_count = 0
         self.error_count = 0
+        self.connection_attempts = 1
+        self.last_error = None
+        self.last_message_type = None
+        self.state = "connected"  # connected, disconnected, error
+        self.connection_history = [{
+            "timestamp": self.connected_at,
+            "event": "connected",
+            "details": f"Initial connection established for {connection_type}"
+        }]
+
+    def update_activity(self, message_type: str = None):
+        self.last_activity = datetime.utcnow()
+        self.message_count += 1
+        self.last_message_type = message_type
+        self.connection_history.append({
+            "timestamp": self.last_activity,
+            "event": "message",
+            "details": f"Received message type: {message_type}"
+        })
+
+    def record_error(self, error: str):
+        self.error_count += 1
+        self.last_error = error
+        self.state = "error"
+        self.connection_history.append({
+            "timestamp": datetime.utcnow(),
+            "event": "error",
+            "details": str(error)
+        })
+
+    def record_disconnect(self):
+        self.state = "disconnected"
+        self.connection_history.append({
+            "timestamp": datetime.utcnow(),
+            "event": "disconnected",
+            "details": "Connection closed"
+        })
 
 class ConnectionManager:
     def __init__(self):
@@ -34,6 +71,10 @@ class ConnectionManager:
             "ui": 0,
             "internal": 0
         }
+        self._connection_history = {
+            "ui": [],
+            "internal": []
+        }
         self._lock = asyncio.Lock()
 
     async def connect(self, websocket: WebSocket, connection_type: str = "ui"):
@@ -47,6 +88,15 @@ class ConnectionManager:
         connection = Connection(websocket, connection_type)
         self.active_connections[connection.id] = connection
         self.connection_types[connection.id] = connection_type
+        
+        # Record connection in history
+        self._connection_history[connection_type].append({
+            "timestamp": connection.connected_at,
+            "event": "connected",
+            "connection_id": connection.id,
+            "details": f"New {connection_type} connection established"
+        })
+        
         logger.info(f"New {connection_type} connection established with ID: {connection.id}")
 
     def disconnect(self, websocket: WebSocket):
@@ -54,6 +104,14 @@ class ConnectionManager:
         # Find connection by websocket
         for conn_id, conn in list(self.active_connections.items()):
             if conn.websocket == websocket:
+                conn.record_disconnect()
+                # Record disconnection in history
+                self._connection_history[conn.type].append({
+                    "timestamp": datetime.utcnow(),
+                    "event": "disconnected",
+                    "connection_id": conn.id,
+                    "details": f"Connection {conn_id} disconnected"
+                })
                 del self.active_connections[conn_id]
                 del self.connection_types[conn_id]
                 logger.info(f"Connection {conn_id} disconnected")
@@ -71,13 +129,12 @@ class ConnectionManager:
                 
             try:
                 await conn.websocket.send_json(message)
-                conn.last_activity = datetime.utcnow()
-                conn.message_count += 1
+                conn.update_activity(message.get("type"))
                 self._last_message[conn.type] = datetime.utcnow()
                 self._message_count[conn.type] = self._message_count.get(conn.type, 0) + 1
             except Exception as e:
                 logger.error(f"Error broadcasting to connection {conn.id}: {e}")
-                conn.error_count += 1
+                conn.record_error(str(e))
                 self._error_count[conn.type] = self._error_count.get(conn.type, 0) + 1
                 self.disconnect(conn.websocket)
 
@@ -103,27 +160,55 @@ class ConnectionManager:
         )
 
     def get_stats(self) -> Dict[str, Any]:
-        """Get connection manager statistics."""
+        """Get detailed connection manager statistics."""
         ui_connections = [conn for conn in self.active_connections.values() if conn.type == "ui"]
         internal_connections = [conn for conn in self.active_connections.values() if conn.type == "internal"]
+        
+        now = datetime.utcnow()
         
         return {
             "ui": {
                 "connected": len(ui_connections) > 0,
-                "last_message": self._last_message.get("ui", datetime.utcnow()),
+                "connection_count": len(ui_connections),
+                "last_message": self._last_message.get("ui", now),
                 "message_count": self._message_count.get("ui", 0),
-                "error_count": self._error_count.get("ui", 0)
+                "error_count": self._error_count.get("ui", 0),
+                "active_connections": [{
+                    "id": conn.id,
+                    "connected_since": conn.connected_at,
+                    "last_activity": conn.last_activity,
+                    "message_count": conn.message_count,
+                    "error_count": conn.error_count,
+                    "state": conn.state,
+                    "last_error": conn.last_error,
+                    "last_message_type": conn.last_message_type,
+                    "connection_history": conn.connection_history
+                } for conn in ui_connections],
+                "connection_history": self._connection_history["ui"][-50:]  # Keep last 50 events
             },
             "internal": {
                 "connected": len(internal_connections) > 0,
-                "last_message": self._last_message.get("internal", datetime.utcnow()),
+                "connection_count": len(internal_connections),
+                "last_message": self._last_message.get("internal", now),
                 "message_count": self._message_count.get("internal", 0),
-                "error_count": self._error_count.get("internal", 0)
+                "error_count": self._error_count.get("internal", 0),
+                "active_connections": [{
+                    "id": conn.id,
+                    "connected_since": conn.connected_at,
+                    "last_activity": conn.last_activity,
+                    "message_count": conn.message_count,
+                    "error_count": conn.error_count,
+                    "state": conn.state,
+                    "last_error": conn.last_error,
+                    "last_message_type": conn.last_message_type,
+                    "connection_history": conn.connection_history
+                } for conn in internal_connections],
+                "connection_history": self._connection_history["internal"][-50:]  # Keep last 50 events
             }
         }
 
     def get_active_connections(self) -> List[Connection]:
-        """Get list of active connections."""
+        """Get list of active connections with detailed status."""
         return list(self.active_connections.values())
 
 # Global instance

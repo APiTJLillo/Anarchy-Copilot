@@ -2,6 +2,9 @@
  * Global configuration for the frontend application.
  */
 
+// Helper function to determine if we're running in Docker
+const isDocker = process.env.REACT_APP_ENVIRONMENT === 'docker';
+
 /**
  * Base URL for API endpoints.
  * When running in Docker, requests are made to 'http://dev:8000'
@@ -11,15 +14,39 @@ export const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localh
 
 /**
  * WebSocket endpoint for proxy monitoring.
- * Using environment variable or falling back to relative URL that matches backend route
  */
-export const WS_ENDPOINT = process.env.REACT_APP_WS_ENDPOINT || 'ws://localhost:8000/api/proxy/ws';
+export const WS_ENDPOINT = process.env.REACT_APP_WS_URL || (isDocker ? 'ws://dev:8000/api/proxy/ws' : 'ws://localhost:8000/api/proxy/ws');
 
 /**
  * WebSocket endpoint for proxy interception.
  * Using environment variable or falling back to relative URL that matches backend route
  */
-export const WS_INTERCEPT_ENDPOINT = process.env.REACT_APP_WS_INTERCEPT_ENDPOINT || 'ws://localhost:8000/api/proxy/ws/intercept';
+export const WS_INTERCEPT_ENDPOINT = process.env.REACT_APP_WS_INTERCEPT_ENDPOINT || (isDocker ? 'ws://dev:8000/api/proxy/ws/intercept' : 'ws://localhost:8000/api/proxy/ws/intercept');
+
+/**
+ * Proxy URL for direct proxy connections.
+ */
+export const PROXY_URL = process.env.REACT_APP_PROXY_URL || (isDocker ? 'http://proxy:8083' : 'http://localhost:8083');
+
+/**
+ * Get the WebSocket URL based on the current environment
+ */
+export const getWebSocketUrl = () => {
+    // First try the environment variable
+    if (process.env.REACT_APP_WS_URL) {
+        return process.env.REACT_APP_WS_URL;
+    }
+
+    // If we're in the browser, construct the URL based on the current window location
+    if (typeof window !== 'undefined') {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const host = window.location.host;
+        return `${protocol}//${host}/api/proxy/ws`;
+    }
+
+    // Fallback to default WebSocket endpoint
+    return WS_ENDPOINT;
+};
 
 /**
  * Configuration options.
@@ -34,7 +61,7 @@ export const CONFIG = {
      * Default proxy settings.
      */
     DEFAULT_PROXY_CONFIG: {
-        host: '127.0.0.1',
+        host: isDocker ? 'proxy' : '127.0.0.1',
         port: 8083,
         intercept_requests: true,
         intercept_responses: true,

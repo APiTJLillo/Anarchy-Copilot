@@ -106,12 +106,10 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> FastAPI:
     # Import and include routers
     from .proxy.endpoints import router as proxy_router
     from .proxy.websocket import router as websocket_router
-    from .health import router as health_router
     from .ai.settings import router as ai_router
     
     app.include_router(proxy_router, prefix="/api/proxy")
     app.include_router(websocket_router, prefix="/api/proxy")  # Mount WebSocket router under /api/proxy
-    app.include_router(health_router, prefix="/api", tags=["system"])
     app.include_router(ai_router, prefix="/api", tags=["ai"])
 
     @app.on_event("startup")

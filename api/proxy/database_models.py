@@ -102,3 +102,18 @@ class ProxyAnalysisResult(Base):
     findings = Column(JSON, nullable=True)
 
     session = relationship("ProxySession", back_populates="analysis_results")
+
+class ProxyTLSInfo(Base):
+    """Model for storing TLS connection information."""
+    __tablename__ = "proxy_tls_info"
+
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("proxy_sessions.id"), nullable=False)
+    connection_id = Column(String, nullable=False)
+    timestamp = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    side = Column(String, nullable=False)  # 'client' or 'server'
+    version = Column(String, nullable=False)
+    cipher_suite = Column(JSON, nullable=False)
+    host = Column(String, nullable=True)
+
+    session = relationship("ProxySession", backref="tls_info")

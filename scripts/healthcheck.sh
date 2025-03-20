@@ -8,7 +8,7 @@ log() {
 
 # Check if health endpoint is responding
 # Use curl with a timeout and retry options
-response=$(curl -s -f --max-time 5 --retry 3 --retry-delay 1 http://localhost:8000/api/health 2>&1)
+response=$(curl -s -f --max-time 5 --retry 3 --retry-delay 1 http://localhost:8000/api/proxy/health 2>&1)
 status=$?
 
 if [ $status -eq 0 ]; then

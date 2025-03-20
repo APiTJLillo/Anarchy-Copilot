@@ -15,13 +15,21 @@ export interface ProxyConfig {
 export interface ProxySettings {
     host: string;
     port: number;
-    interceptRequests: boolean;
-    interceptResponses: boolean;
-    allowedHosts: string[];
-    excludedHosts: string[];
-    maxConnections: number;
-    maxKeepaliveConnections: number;
-    keepaliveTimeout: number;
+    interceptRequests?: boolean;
+    interceptResponses?: boolean;
+    allowedHosts?: string[];
+    excludedHosts?: string[];
+    maxConnections?: number;
+    maxKeepaliveConnections?: number;
+    keepaliveTimeout?: number;
+    // Snake case versions
+    intercept_requests?: boolean;
+    intercept_responses?: boolean;
+    allowed_hosts?: string[];
+    excluded_hosts?: string[];
+    max_connections?: number;
+    max_keepalive_connections?: number;
+    keepalive_timeout?: number;
 }
 
 export interface ProxySession {
@@ -143,6 +151,20 @@ export interface Project {
 export const useProxyApi = () => {
     const api = useApi();
 
+    const convertSettingsToSnakeCase = (settings: ProxySettings) => {
+        return {
+            host: settings.host,
+            port: settings.port,
+            intercept_requests: settings.intercept_requests,
+            intercept_responses: settings.intercept_responses,
+            allowed_hosts: settings.allowed_hosts,
+            excluded_hosts: settings.excluded_hosts,
+            max_connections: settings.max_connections,
+            max_keepalive_connections: settings.max_keepalive_connections,
+            keepalive_timeout: settings.keepalive_timeout
+        };
+    };
+
     return {
         // User and Project Management
         async getUsers(): Promise<User[]> {
@@ -191,13 +213,13 @@ export const useProxyApi = () => {
                 name,
                 project_id: projectId,
                 user_id: userId,
-                settings
+                settings: convertSettingsToSnakeCase(settings)
             });
             return response.data;
         },
 
         async startProxy(sessionId: number, settings: ProxySettings): Promise<any> {
-            const response = await api.post(`/proxy/sessions/${sessionId}/start`, settings);
+            const response = await api.post(`/proxy/sessions/${sessionId}/start`, convertSettingsToSnakeCase(settings));
             return response.data;
         },
 

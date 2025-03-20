@@ -256,17 +256,31 @@ def upgrade() -> None:
         sa.Column('decrypted_response', sa.Text(), nullable=True),  # Decrypted response body
         
         # Metadata
-        sa.Column('tags', sqlite.JSON(), nullable=True),  # List of tags (e.g., ["raw", "encrypted", "request", "response"])
-        sa.Column('is_intercepted', sa.Boolean(), server_default='1', nullable=False),
-        sa.Column('is_encrypted', sa.Boolean(), server_default='0', nullable=False),
-        sa.Column('duration', sa.Float(), nullable=True),  # Request duration in seconds
-        sa.Column('notes', sa.Text(), nullable=True),
+        sa.Column('tags', sqlite.JSON(), nullable=True),  # List of tags
+        sa.Column('is_intercepted', sa.Boolean(), default=True),
+        sa.Column('is_encrypted', sa.Boolean(), default=False),
         sa.ForeignKeyConstraint(['session_id'], ['proxy_sessions.id'], ),
         sa.PrimaryKeyConstraint('id')
     )
     op.create_index('ix_proxy_history_session_id', 'proxy_history', ['session_id'], unique=False)
-    op.create_index('ix_proxy_history_timestamp', 'proxy_history', ['timestamp'], unique=False)
-    
+
+    # Create proxy_tls_info table
+    op.create_table(
+        'proxy_tls_info',
+        sa.Column('id', sa.Integer(), nullable=False),
+        sa.Column('session_id', sa.Integer(), nullable=False),
+        sa.Column('connection_id', sa.String(), nullable=False),
+        sa.Column('timestamp', sa.DateTime(timezone=True), server_default=sa.text('CURRENT_TIMESTAMP'), nullable=False),
+        sa.Column('side', sa.String(), nullable=False),  # 'client' or 'server'
+        sa.Column('version', sa.String(), nullable=False),
+        sa.Column('cipher_suite', sqlite.JSON(), nullable=False),
+        sa.Column('host', sa.String(), nullable=True),
+        sa.ForeignKeyConstraint(['session_id'], ['proxy_sessions.id'], ),
+        sa.PrimaryKeyConstraint('id')
+    )
+    op.create_index('ix_proxy_tls_info_session_id', 'proxy_tls_info', ['session_id'], unique=False)
+    op.create_index('ix_proxy_tls_info_connection_id', 'proxy_tls_info', ['connection_id'], unique=False)
+
     # Create modified_requests table
     op.create_table(
         'modified_requests',
@@ -323,6 +337,7 @@ def downgrade() -> None:
     op.drop_table('tunnel_metrics')
     op.drop_table('modified_requests')  # Add this table to be dropped
     op.drop_table('proxy_history')
+    op.drop_table('proxy_tls_info')
     op.drop_table('interception_rules')
     op.drop_table('proxy_sessions')
     op.drop_table('vulnerability_results')

@@ -62,6 +62,7 @@ const menuGroups = [
     header: "Configuration",
     items: [
       { text: 'Tools', icon: <BuildIcon />, path: '/tools' },
+      { text: 'Health', icon: <MonitoringIcon />, path: '/health' },
       { text: 'AI Settings', icon: <SettingsIcon />, path: '/settings/ai' },
     ]
   }

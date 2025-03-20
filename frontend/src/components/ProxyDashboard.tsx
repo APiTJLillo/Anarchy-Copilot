@@ -1,6 +1,6 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import useWebSocket, { ReadyState } from 'react-use-websocket';
-import { WS_ENDPOINT } from '../config';
+import { getWebSocketUrl } from '../config';
 import { RequestModal } from './proxy/RequestModal';
 import {
     Box,
@@ -22,6 +22,12 @@ import {
     TableHead,
     TableRow,
 } from '@mui/material';
+import AnalysisResults from '../components/proxy/AnalysisResults';
+import ErrorBoundary from '../components/proxy/ErrorBoundary';
+import { useProxyApi, ProxySettings } from '../api/proxyApi';
+import { User } from '../api/proxyApi';
+import { Project } from '../api/proxyApi';
+import { VersionInfo } from '../api/proxyApi';
 
 interface ProxyHistoryEntry {
     id: number;
@@ -56,6 +62,9 @@ interface WebSocketMessage {
         interceptRequests?: boolean;
         interceptResponses?: boolean;
         history?: ProxyHistoryEntry[];
+        status?: { isRunning: boolean };
+        isRunning?: boolean;
+        version?: VersionInfo;
         [key: string]: any;
     };
 }
@@ -65,6 +74,24 @@ interface ProxyHistoryMessage extends WebSocketMessage {
     data: ProxyHistoryEntry;
 }
 
+interface TabPanelProps {
+    children?: React.ReactNode;
+    index: number;
+    value: number;
+}
+
+const CustomTabPanel: React.FC<TabPanelProps> = ({ children, value, index }) => (
+    <Box
+        role="tabpanel"
+        hidden={value !== index}
+        id={`proxy-tabpanel-${index}`}
+        aria-labelledby={`proxy-tab-${index}`}
+        sx={{ py: 2 }}
+    >
+        {value === index && children}
+    </Box>
+);
+
 const ProxyDashboard: React.FC = () => {
     const [history, setHistory] = useState<ProxyHistoryEntry[]>([]);
     const [selectedEntry, setSelectedEntry] = useState<ProxyHistoryEntry | null>(null);
@@ -72,6 +99,19 @@ const ProxyDashboard: React.FC = () => {
     const [interceptRequests, setInterceptRequests] = useState(false);
     const [interceptResponses, setInterceptResponses] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [analysisResults, setAnalysisResults] = useState<any[] | null>(null);
+    const [tabValue, setTabValue] = useState(0);
+    const [proxyStatus, setProxyStatus] = useState<{ isRunning: boolean }>({ isRunning: false });
+    const [currentUser, setCurrentUser] = useState<User | null>(null);
+    const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+    const [session, setSession] = useState<any>(null);
+    const [localProxyEnabled, setLocalProxyEnabled] = useState(false);
+    const [version, setVersion] = useState<VersionInfo | null>(null);
+    const proxyApi = useProxyApi();
+
+    const handleTabChange = (event: React.SyntheticEvent, newValue: number) => {
+        setTabValue(newValue);
+    };
 
     const handleWebSocketMessage = useCallback((message: MessageEvent) => {
         try {
@@ -88,6 +128,14 @@ const ProxyDashboard: React.FC = () => {
                     console.log('Setting initial history:', data.data.history);
                     setHistory(data.data.history);
                 }
+                if (data.data.status) {
+                    console.log('Setting initial proxy status:', data.data.status);
+                    setProxyStatus(data.data.status);
+                }
+                if (data.data.version) {
+                    console.log('Setting version info:', data.data.version);
+                    setVersion(data.data.version);
+                }
             } else if (data.type === "proxy_history") {
                 console.log('Processing history update:', data);
                 const historyMessage = data as ProxyHistoryMessage;
@@ -101,6 +149,12 @@ const ProxyDashboard: React.FC = () => {
                 console.log('Processing state update:', data.data);
                 setInterceptRequests(data.data.interceptRequests ?? interceptRequests);
                 setInterceptResponses(data.data.interceptResponses ?? interceptResponses);
+                if (data.data.status) {
+                    setProxyStatus(data.data.status);
+                }
+            } else if (data.type === "proxy_status") {
+                console.log('Processing proxy status update:', data.data);
+                setProxyStatus({ isRunning: data.data.isRunning ?? false });
             }
             setError(null);
         } catch (err) {
@@ -109,16 +163,38 @@ const ProxyDashboard: React.FC = () => {
         }
     }, [interceptRequests, interceptResponses]);
 
-    const { sendJsonMessage, readyState } = useWebSocket(WS_ENDPOINT, {
+    const fetchStatus = useCallback(async () => {
+        try {
+            const status = await proxyApi.getStatus();
+            setProxyStatus(status);
+            setInterceptRequests(status.interceptRequests ?? false);
+            setInterceptResponses(status.interceptResponses ?? false);
+        } catch (err) {
+            console.error('Failed to fetch status:', err);
+            setError('Failed to fetch proxy status');
+        }
+    }, [proxyApi]);
+
+    // Fetch status on mount
+    useEffect(() => {
+        fetchStatus();
+    }, [fetchStatus]);
+
+    const { sendJsonMessage, readyState } = useWebSocket(getWebSocketUrl(), {
         onMessage: handleWebSocketMessage,
         onOpen: () => {
-            console.log('WebSocket connected to:', WS_ENDPOINT);
+            console.log('WebSocket connected to:', getWebSocketUrl());
             setWsConnected(true);
             setError(null);
+            fetchStatus(); // Fetch status when WebSocket connects
         },
         onClose: () => {
             console.log('WebSocket disconnected');
             setWsConnected(false);
+            // Don't set error on normal closure
+            if (readyState !== ReadyState.CLOSING) {
+                setError('Lost connection to proxy server');
+            }
         },
         onError: (event: Event) => {
             console.error('WebSocket error:', event);
@@ -127,11 +203,21 @@ const ProxyDashboard: React.FC = () => {
         },
         shouldReconnect: (closeEvent: CloseEvent) => {
             console.log('WebSocket closed, attempting to reconnect. Close event:', closeEvent);
-            return true;
+            // Don't reconnect on normal closure
+            return closeEvent.code !== 1000 && closeEvent.code !== 1001;
         },
         reconnectAttempts: 5,
         reconnectInterval: 3000,
-        share: true
+        share: true,
+        retryOnError: true,
+        filter: (message: MessageEvent) => {
+            try {
+                const data = JSON.parse(message.data);
+                return data && typeof data === 'object';
+            } catch {
+                return false;
+            }
+        }
     });
 
     const handleInterceptChange = useCallback((type: "requests" | "responses", value: boolean) => {
@@ -144,6 +230,55 @@ const ProxyDashboard: React.FC = () => {
         };
         sendJsonMessage(update);
     }, [interceptRequests, interceptResponses, sendJsonMessage]);
+
+    const startProxy = useCallback(async () => {
+        try {
+            if (!currentUser || !selectedProject) {
+                setError('Please select a user and project');
+                return;
+            }
+
+            // Create settings with snake_case properties
+            const settings: ProxySettings = {
+                host: "127.0.0.1",
+                port: 8083,
+                intercept_requests: true,
+                intercept_responses: true,
+                allowed_hosts: [],
+                excluded_hosts: [],
+                max_connections: 100,
+                max_keepalive_connections: 20,
+                keepalive_timeout: 30
+            };
+
+            const newSession = await proxyApi.createSession("New Session", selectedProject.id, currentUser.id, settings);
+            setSession(newSession);
+
+            // Start the proxy with the same settings
+            await proxyApi.startProxy(newSession.id, settings);
+            await fetchStatus();
+            if (localProxyEnabled) {
+                console.log("Local proxy client started");
+            }
+            setError(null);
+        } catch (err) {
+            setError('Failed to start proxy');
+            console.error(err);
+        }
+    }, [fetchStatus, currentUser, selectedProject, localProxyEnabled, proxyApi]);
+
+    const stopProxy = useCallback(async () => {
+        try {
+            const update: WebSocketMessage = {
+                type: "stop_proxy",
+                data: {}
+            };
+            sendJsonMessage(update);
+        } catch (err) {
+            console.error('Failed to stop proxy:', err);
+            setError('Failed to stop proxy');
+        }
+    }, [sendJsonMessage]);
 
     const connectionStatus = {
         [ReadyState.CONNECTING]: 'Connecting',
@@ -192,9 +327,19 @@ const ProxyDashboard: React.FC = () => {
                 <Grid item xs={12}>
                     <Paper sx={{ p: 2 }}>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-                            <Typography variant="h6">
-                                WebSocket Status: {connectionStatus}
-                            </Typography>
+                            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                                <Typography variant="h6">
+                                    Proxy Status: {proxyStatus.isRunning ? 'Running' : 'Stopped'}
+                                </Typography>
+                            </Box>
+                            <Button
+                                variant="contained"
+                                color={proxyStatus.isRunning ? 'error' : 'primary'}
+                                onClick={proxyStatus.isRunning ? stopProxy : startProxy}
+                                disabled={!wsConnected}
+                            >
+                                {proxyStatus.isRunning ? 'Stop Proxy' : 'Start Proxy'}
+                            </Button>
                             <FormControlLabel
                                 control={
                                     <Checkbox
@@ -260,6 +405,16 @@ const ProxyDashboard: React.FC = () => {
                     </Paper>
                 </Grid>
             </Grid>
+
+            <CustomTabPanel value={tabValue} index={2}>
+                <Grid container spacing={3}>
+                    <Grid item xs={12}>
+                        <ErrorBoundary component="Analysis Results">
+                            <AnalysisResults results={analysisResults || []} />
+                        </ErrorBoundary>
+                    </Grid>
+                </Grid>
+            </CustomTabPanel>
         </Box>
     );
 };

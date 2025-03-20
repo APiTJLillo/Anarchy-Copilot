@@ -117,49 +117,65 @@ async def start_proxy(
 ) -> dict:
     """Start the proxy with the specified settings."""
     try:
-            config = get_settings()
-            result = await db.execute(
-                select(ProxySession).where(ProxySession.id == session_id)
-            )
-            session = result.scalar_one_or_none()
-            if not session:
-                raise HTTPException(status_code=404, detail="Session not found")
+        config = get_settings()
+        result = await db.execute(
+            select(ProxySession).where(ProxySession.id == session_id)
+        )
+        session = result.scalar_one_or_none()
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
 
-            # Verify CA certificate files exist
-            if not os.path.exists(config.ca_cert_path):
-                raise HTTPException(status_code=500, detail=f"CA certificate file not found: {config.ca_cert_path}")
-            if not os.path.exists(config.ca_key_path):
-                raise HTTPException(status_code=500, detail=f"CA key file not found: {config.ca_key_path}")
+        # Verify CA certificate files exist
+        if not os.path.exists(config.ca_cert_path):
+            raise HTTPException(status_code=500, detail=f"CA certificate file not found: {config.ca_cert_path}")
+        if not os.path.exists(config.ca_key_path):
+            raise HTTPException(status_code=500, detail=f"CA key file not found: {config.ca_key_path}")
 
-            # Initialize CA
-            logger.info(f"Initializing CA with cert_path={config.ca_cert_path}, key_path={config.ca_key_path}")
-            ca = CertificateAuthority(
-                ca_cert_path=Path(config.ca_cert_path),
-                ca_key_path=Path(config.ca_key_path)
-            )
+        # Initialize CA
+        logger.info(f"Initializing CA with cert_path={config.ca_cert_path}, key_path={config.ca_key_path}")
+        ca = CertificateAuthority(
+            ca_cert_path=Path(config.ca_cert_path),
+            ca_key_path=Path(config.ca_key_path)
+        )
 
-            # Start the proxy with the configured CA
-            from proxy.server.proxy_server import ProxyServer
-            proxy_server = ProxyServer(config=ProxyConfig(**session.settings), ca_instance=ca)
+        # Convert settings to snake_case format, checking both camelCase and snake_case attributes
+        proxy_settings = {
+            "host": settings.host,
+            "port": settings.port,
+            "intercept_requests": getattr(settings, "intercept_requests", None) or getattr(settings, "interceptRequests", True),
+            "intercept_responses": getattr(settings, "intercept_responses", None) or getattr(settings, "interceptResponses", True),
+            "allowed_hosts": getattr(settings, "allowed_hosts", None) or getattr(settings, "allowedHosts", []),
+            "excluded_hosts": getattr(settings, "excluded_hosts", None) or getattr(settings, "excludedHosts", []),
+            "max_connections": getattr(settings, "max_connections", None) or getattr(settings, "maxConnections", 100),
+            "max_keepalive_connections": getattr(settings, "max_keepalive_connections", None) or getattr(settings, "maxKeepaliveConnections", 20),
+            "keepalive_timeout": getattr(settings, "keepalive_timeout", None) or getattr(settings, "keepaliveTimeout", 30),
+            "ca_cert_path": config.ca_cert_path,
+            "ca_key_path": config.ca_key_path
+        }
 
-            try:
-                await proxy_server.start()
-            except Exception as e:
-                logger.error(f"Failed to start proxy server: {e}")
-                raise HTTPException(status_code=500, detail=str(e))
+        # Start the proxy with the configured CA
+        from proxy.server.proxy_server import ProxyServer
+        from .state import proxy_state
 
-            # Update session settings and status
-            merged_settings = {
-                **settings.model_dump(),
-                "ca_cert_path": config.ca_cert_path,
-                "ca_key_path": config.ca_key_path
-            }
-            session.is_active = True
-            session.settings.update(merged_settings)
-            await db.commit()
+        # Create and store proxy server instance
+        proxy_server = ProxyServer(config=ProxyConfig(**proxy_settings), ca_instance=ca)
+        proxy_state.proxy_server = proxy_server
 
-            logger.info(f"Proxy started successfully with certificate paths: {config.ca_cert_path}, {config.ca_key_path}")
-            return {"status": "started", "session_id": session_id}
+        try:
+            await proxy_server.start()
+            await proxy_state.start()  # Update state after successful start
+        except Exception as e:
+            proxy_state.proxy_server = None  # Clear reference on failure
+            logger.error(f"Failed to start proxy server: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
+
+        # Update session settings and status
+        session.is_active = True
+        session.settings.update(proxy_settings)
+        await db.commit()
+
+        logger.info(f"Proxy started successfully with certificate paths: {config.ca_cert_path}, {config.ca_key_path}")
+        return {"status": "started", "session_id": session_id}
     except Exception as e:
         logger.error(f"Failed to start proxy: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -168,12 +184,18 @@ async def start_proxy(
 async def stop_proxy(db: AsyncSession = Depends(get_db)) -> dict:
     """Stop the active proxy session."""
     try:
+        # Stop the proxy through proxy_state
+        from .state import proxy_state
+        await proxy_state.stop()  # This will handle stopping the actual server
+        
+        # Update database state
         await db.execute(
             update(ProxySession)
             .where(ProxySession.is_active == True)
             .values(is_active=False, end_time=datetime.utcnow())
         )
         await db.commit()
+        
         return {"status": "stopped"}
     except Exception as e:
         logger.error(f"Failed to stop proxy: {e}")

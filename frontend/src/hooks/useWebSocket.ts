@@ -13,6 +13,8 @@ interface WebSocketHookOptions<T = any> {
 interface WebSocketConnection<T = any> {
     socket: WebSocket;
     subscribers: Set<(data: T) => void>;
+    isConnecting: boolean;
+    reconnectCount: number;
 }
 
 // Singleton WebSocket instance and subscriber management
@@ -49,20 +51,28 @@ export const useWebSocket = <T = any>(url: string, options: WebSocketHookOptions
 
     const [isConnected, setIsConnected] = useState(false);
     const [error, setError] = useState<Event | null>(null);
-    const ws = useRef<WebSocket | null>(null);
-    const reconnectCount = useRef(0);
-    const reconnectTimeoutRef = useRef<NodeJS.Timeout>();
     const mountedRef = useRef(true);
+    const reconnectTimeoutRef = useRef<NodeJS.Timeout>();
 
     const connect = useCallback(() => {
         try {
             // Check if we already have a connection for this URL
             let connection = keepAlive ? globalWebSockets.get(url) : null;
 
+            // Don't create a new connection if one is already being established
+            if (connection?.isConnecting) {
+                return;
+            }
+
             // If no existing connection or it's closed, create a new one
             if (!connection || connection.socket.readyState === WebSocket.CLOSED) {
                 const socket = new WebSocket(url);
-                connection = { socket, subscribers: new Set() };
+                connection = {
+                    socket,
+                    subscribers: new Set(),
+                    isConnecting: true,
+                    reconnectCount: 0
+                };
                 if (keepAlive) {
                     globalWebSockets.set(url, connection);
                 }
@@ -73,54 +83,57 @@ export const useWebSocket = <T = any>(url: string, options: WebSocketHookOptions
             }
 
             connection.socket.onopen = () => {
-                console.log('WebSocket connected');
-                if (mountedRef.current) {
-                    setIsConnected(true);
-                    setError(null);
-                }
-                reconnectCount.current = 0;
+                if (!mountedRef.current) return;
+
+                connection!.isConnecting = false;
+                connection!.reconnectCount = 0;
+                setIsConnected(true);
+                setError(null);
                 if (onOpen) onOpen();
             };
 
             connection.socket.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                // Broadcast to all subscribers
-                connection?.subscribers.forEach(subscriber => subscriber(data));
+                if (!mountedRef.current) return;
+
+                try {
+                    const data = JSON.parse(event.data);
+                    // Broadcast to all subscribers
+                    connection?.subscribers.forEach(subscriber => subscriber(data));
+                } catch (err) {
+                    console.error('Failed to parse WebSocket message:', err);
+                }
             };
 
             connection.socket.onclose = () => {
-                console.log('WebSocket closed');
-                if (mountedRef.current) {
-                    setIsConnected(false);
-                }
+                if (!mountedRef.current) return;
+
+                setIsConnected(false);
                 if (onClose) onClose();
 
-                // Remove from global map if connection is closed
-                if (keepAlive) {
+                // Only attempt reconnect if we're keeping the connection alive
+                if (keepAlive && connection!.reconnectCount < reconnectAttempts) {
+                    connection!.reconnectCount += 1;
+                    connection!.isConnecting = false;
                     globalWebSockets.delete(url);
-                }
 
-                // Attempt to reconnect
-                if (reconnectCount.current < reconnectAttempts) {
-                    reconnectCount.current += 1;
                     reconnectTimeoutRef.current = setTimeout(() => {
                         if (mountedRef.current) {
-                            console.log(`Reconnecting... Attempt ${reconnectCount.current}`);
                             connect();
                         }
                     }, reconnectInterval);
+                } else {
+                    // Clean up the connection
+                    globalWebSockets.delete(url);
                 }
             };
 
             connection.socket.onerror = (err) => {
-                console.error('WebSocket error:', err);
-                if (mountedRef.current) {
-                    setError(err);
-                }
+                if (!mountedRef.current) return;
+
+                setError(err);
                 if (onError) onError(err);
             };
 
-            ws.current = connection.socket;
         } catch (err) {
             console.error('Failed to create WebSocket:', err);
             if (mountedRef.current) {
@@ -135,7 +148,6 @@ export const useWebSocket = <T = any>(url: string, options: WebSocketHookOptions
         // If we have an existing connection, use it
         const existingConnection = keepAlive ? globalWebSockets.get(url) : null;
         if (existingConnection && existingConnection.socket.readyState === WebSocket.OPEN) {
-            ws.current = existingConnection.socket;
             if (onMessage) {
                 addSubscriber(url, onMessage);
             }
@@ -155,17 +167,22 @@ export const useWebSocket = <T = any>(url: string, options: WebSocketHookOptions
                 removeSubscriber(url, onMessage);
             }
             // Only close the socket if we're not keeping it alive
-            if (!keepAlive && ws.current) {
-                ws.current.close();
+            if (!keepAlive) {
+                const connection = globalWebSockets.get(url);
+                if (connection) {
+                    connection.socket.close();
+                    globalWebSockets.delete(url);
+                }
             }
         };
-    }, [connect, url, keepAlive, onOpen]);
+    }, [connect, url, keepAlive, onMessage, onOpen]);
 
     const send = useCallback((data: any) => {
-        if (ws.current?.readyState === WebSocket.OPEN) {
-            ws.current.send(JSON.stringify(data));
+        const connection = globalWebSockets.get(url);
+        if (connection?.socket.readyState === WebSocket.OPEN) {
+            connection.socket.send(JSON.stringify(data));
         }
-    }, []);
+    }, [url]);
 
     return {
         isConnected,

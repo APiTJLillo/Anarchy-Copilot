@@ -29,7 +29,7 @@ services:
       - ANARCHY_API_TITLE=Anarchy Copilot API
       - ANARCHY_API_VERSION=0.1.0
       - ANARCHY_DEBUG=true
-      - ANARCHY_CORS_ORIGINS=http://localhost:3000,ws://localhost:3000,http://localhost:8000,ws://localhost:8000
+      - ANARCHY_CORS_ORIGINS=http://localhost:3000,ws://localhost:3000,http://localhost:8000,ws://localhost:8000,http://dev:8000,ws://dev:8000
       # Proxy Settings (only for client configuration)
       - ANARCHY_PROXY_HOST=proxy
       - ANARCHY_PROXY_PORT=8083
@@ -38,7 +38,7 @@ services:
     entrypoint: [ "/usr/local/bin/api-entrypoint.sh" ]
     command: [ "start" ]
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8000/api/health" ]
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/api/proxy/health" ]
       interval: 5s
       timeout: 10s
       retries: 5
@@ -91,11 +91,14 @@ services:
       dockerfile: Dockerfile.frontend
     volumes:
       - type: bind
-        source: ./frontend
-        target: /app
-      - type: volume
-        source: frontend-node-modules
-        target: /app/node_modules
+        source: ./frontend/src
+        target: /app/src
+      - type: bind
+        source: ./frontend/public
+        target: /app/public
+      - type: bind
+        source: ./frontend/tsconfig.json
+        target: /app/tsconfig.json
     ports:
       - "3000:3000"
     environment:
@@ -103,8 +106,9 @@ services:
       - REACT_APP_API_BASE_URL=http://localhost:8000
       - REACT_APP_PROXY_URL=http://localhost:8083
       - REACT_APP_WS_URL=ws://localhost:8000/api/proxy/ws
-      - PORT=3000 # Set explicit port for React dev server
+      - PORT=3000
       - WDS_SOCKET_PORT=3000
+      - REACT_APP_ENVIRONMENT=docker
     depends_on:
       dev:
         condition: service_healthy

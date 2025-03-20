@@ -428,6 +428,21 @@ export const RequestModal: React.FC<RequestModalProps> = ({
         }
     };
 
+    // Add type for editor value
+    const handleHeadersChange = (value: string | undefined) => {
+        setEditedRequest({
+            ...editedRequest,
+            headers: value || ''
+        });
+    };
+
+    const handleBodyChange = (value: string | undefined) => {
+        setEditedRequest({
+            ...editedRequest,
+            body: value || ''
+        });
+    };
+
     if (!request) return null;
 
     return (
@@ -737,19 +752,10 @@ export const RequestModal: React.FC<RequestModalProps> = ({
                     <Box sx={{ bgcolor: 'background.paper', borderRadius: 1, height: '200px', mb: 2 }}>
                         <Editor
                             height="200px"
-                            defaultLanguage="json"
+                            language="json"
                             theme="vs-dark"
                             value={formatHeaders(editedRequest.headers)}
-                            onChange={(value) => setEditedRequest({
-                                ...editedRequest,
-                                headers: value || ''
-                            })}
-                            options={{
-                                minimap: { enabled: false },
-                                scrollBeyondLastLine: false,
-                                automaticLayout: true,
-                                readOnly: false
-                            }}
+                            onChange={handleHeadersChange}
                         />
                     </Box>
 
@@ -761,22 +767,13 @@ export const RequestModal: React.FC<RequestModalProps> = ({
                                     {(request.tags && getDataVersion(request.tags) === 'decrypted') ? 'Decrypted' : 'Raw'} Data
                                 </Typography>
                             </Box>
-                            <Box sx={{ bgcolor: 'background.paper', borderRadius: 1, height: '300px' }}>
+                            <Box sx={{ bgcolor: 'background.paper', borderRadius: 1, height: '400px' }}>
                                 <Editor
-                                    height="300px"
-                                    defaultLanguage="html"
+                                    height="400px"
+                                    language={getEditorLanguage(editedRequest)}
                                     theme="vs-dark"
                                     value={editedRequest.body || formatData('request')}
-                                    onChange={(value) => setEditedRequest({
-                                        ...editedRequest,
-                                        body: value || ''
-                                    })}
-                                    options={{
-                                        minimap: { enabled: false },
-                                        scrollBeyondLastLine: false,
-                                        automaticLayout: true,
-                                        readOnly: false
-                                    }}
+                                    onChange={handleBodyChange}
                                 />
                             </Box>
                         </>

@@ -19,6 +19,7 @@ from api.proxy import router as proxy_router
 from api.proxy.websocket import router as websocket_router
 from api.projects import router as projects_router
 from api.users import router as users_router
+from api.health import router as health_router
 from api import create_app
 from version import __version__
 
@@ -88,6 +89,7 @@ def create_and_configure_app():
     app.include_router(proxy_router, prefix="/api/proxy")  # Mount proxy router at /api/proxy
     app.include_router(websocket_router, prefix="/api/proxy")  # Mount WebSocket router at /api/proxy
     app.include_router(users_router, prefix="/api/users")  # Mounts at /api/users
+    app.include_router(health_router, prefix="/api/health", tags=["health"])  # Mount health router at /api/health
 
     # Debug log all registered routes
     logger.debug("All registered routes:")
@@ -98,14 +100,6 @@ def create_and_configure_app():
             logger.debug(f"  {route.path} [WebSocket]")
 
     # Add diagnostic routes
-    @app.get("/api/health")
-    async def health_check():
-        """Basic health check endpoint."""
-        return {
-            "status": "healthy",
-            "version": __version__
-        }
-    
     @app.get("/api/version")
     async def get_version():
         """Get API version."""

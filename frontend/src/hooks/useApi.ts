@@ -1,7 +1,7 @@
 import axios, { AxiosInstance } from 'axios';
 
 export const useApi = (): AxiosInstance => {
-    const baseURL = process.env.REACT_APP_API_URL || 'http://localhost:8000/api';
+    const baseURL = `${process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000'}/api`;
 
     const instance = axios.create({
         baseURL,

@@ -12,6 +12,7 @@ import AISettings from './components/settings/AISettings';
 import { aiReducer } from './store/ai/reducer';
 import type { RootState } from './store/types';
 import { AIRoutes } from './routes/ai';
+import Health from './pages/Health';
 
 // Create Redux store with proper typing
 const store = configureStore({
@@ -67,7 +68,7 @@ function App() {
                 <Route path="/recon" element={<ReconDashboard />} />
                 <Route path="/proxy" element={<ProxyDashboard />} />
                 <Route path="/projects" element={<ProjectManager />} />
-
+                <Route path="/health" element={<Health />} />
                 {/* AI Routes */}
                 <Route path="/ai/*" element={AIRoutes} />
                 <Route path="/settings/ai" element={<AISettings />} />

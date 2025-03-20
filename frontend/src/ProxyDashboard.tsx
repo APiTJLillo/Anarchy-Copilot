@@ -457,7 +457,7 @@ const ProxyDashboardContent: React.FC = () => {
               <Grid container spacing={3}>
                 <Grid item xs={12}>
                   <ErrorBoundary component="Analysis Results">
-                    <AnalysisResults results={analysisResults} />
+                    <AnalysisResults results={analysisResults || []} />
                   </ErrorBoundary>
                 </Grid>
               </Grid>

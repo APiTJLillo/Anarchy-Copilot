@@ -21,8 +21,10 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
 }) => {
     const { activeProject, setActiveProject, loading, projects } = useProject();
 
-    const handleChange = (event: SelectChangeEvent<number>) => {
-        const selectedProject = projects.find(p => p.id === event.target.value);
+    const handleChange = (event: SelectChangeEvent<number | ''>) => {
+        const value = event.target.value;
+        if (value === '') return;
+        const selectedProject = projects.find(p => p.id === value);
         if (selectedProject) {
             setActiveProject(selectedProject);
         }
@@ -34,7 +36,7 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
                 <InputLabel id="project-select-label">Active Project</InputLabel>
                 <Select
                     labelId="project-select-label"
-                    value={activeProject?.id || ''}
+                    value={activeProject?.id ?? ''}
                     label="Active Project"
                     onChange={handleChange}
                 >

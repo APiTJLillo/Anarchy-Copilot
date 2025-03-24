@@ -70,6 +70,20 @@
                 "console"
             ],
             "propagate": false
+        },
+        "proxy.websocket": {
+            "level": "DEBUG",
+            "handlers": [
+                "console"
+            ],
+            "propagate": false
+        },
+        "api.websocket": {
+            "level": "DEBUG",
+            "handlers": [
+                "console"
+            ],
+            "propagate": false
         }
     }
 }

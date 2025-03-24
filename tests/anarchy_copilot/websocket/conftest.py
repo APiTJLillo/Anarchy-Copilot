@@ -3,14 +3,19 @@ WebSocket testing fixtures for Anarchy Copilot.
 """
 
 import pytest
+from datetime import datetime
 from typing import AsyncGenerator, Dict, Generator, List
+from uuid import uuid4
 from aiohttp import web
 from aiohttp.test_utils import TestClient
 from aiohttp.web import Application
 
-from proxy.websocket.types import WSMessage, WSMessageType
+from proxy.websocket.types import (
+    WSMessage, ConnectionType, MessageType, MessageDirection,
+    create_text_message, create_binary_message
+)
 from proxy.websocket.manager import WebSocketManager
-from proxy.websocket.conversation import WSConversation, SecurityAnalyzer
+from proxy.websocket.conversation import WSConversation
 
 @pytest.fixture
 async def ws_manager() -> AsyncGenerator[WebSocketManager, None]:
@@ -28,28 +33,29 @@ async def ws_conversation() -> AsyncGenerator[WSConversation, None]:
     yield conversation
 
 @pytest.fixture
-def security_analyzer() -> Generator[SecurityAnalyzer, None, None]:
-    """Fixture for a security analyzer instance."""
-    analyzer = SecurityAnalyzer()
-    yield analyzer
-
-@pytest.fixture
 def sample_ws_messages() -> List[WSMessage]:
     """Fixture providing sample WebSocket messages for testing."""
+    now = datetime.utcnow()
     return [
-        WSMessage(
-            type=WSMessageType.TEXT,
+        create_text_message(
             data="Hello world",
+            direction=MessageDirection.OUTGOING,
+            id=uuid4(),
+            timestamp=now,
             metadata={"test": True}
         ),
-        WSMessage(
-            type=WSMessageType.BINARY,
+        create_binary_message(
             data=b"Binary data",
+            direction=MessageDirection.INCOMING,
+            id=uuid4(),
+            timestamp=now,
             metadata={"test": True}
         ),
-        WSMessage(
-            type=WSMessageType.TEXT,
+        create_text_message(
             data='{"password": "secret123"}',
+            direction=MessageDirection.OUTGOING,
+            id=uuid4(),
+            timestamp=now,
             metadata={"sensitive": True}
         )
     ]

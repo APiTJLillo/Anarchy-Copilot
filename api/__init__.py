@@ -53,16 +53,29 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> FastAPI:
 
     logger.debug(f"Creating app with config: {_app_config}")
 
-    # Configure CORS middleware
-    logger.info(f"Configuring CORS with origins: {settings.cors_origins}")
+    # Configure CORS middleware with development settings
+    origins = [
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "http://localhost:8083",
+        "ws://localhost:3000",
+        "ws://localhost:8000",
+        "ws://localhost:8083",
+        "http://dev:8000",
+        "ws://dev:8000",
+        "http://proxy:8083",
+        "ws://proxy:8083",
+        "*"  # Allow all origins in development
+    ]
+    logger.info(f"Configuring CORS with origins: {origins}")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.cors_origins,
+        allow_origins=origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
         expose_headers=["*"],
-        max_age=600,
+        max_age=86400,  # Cache preflight requests for 24 hours
     )
 
     logger.debug("CORS middleware configured")
@@ -74,18 +87,17 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> FastAPI:
             response = await call_next(request)
             
             if isinstance(response, Response):
-                # Add CORS headers for WebSocket upgrade requests
-                if request.headers.get("upgrade", "").lower() == "websocket":
-                    origin = request.headers.get("origin")
-                    if origin and origin in settings.cors_origins:
-                        response.headers.update({
-                            "access-control-allow-origin": origin,
-                            "access-control-allow-methods": "*",
-                            "access-control-allow-headers": "*",
-                            "access-control-allow-credentials": "true",
-                            "access-control-max-age": "600",
-                            "access-control-expose-headers": "*"
-                        })
+                # Add CORS headers for all requests
+                origin = request.headers.get("origin")
+                if origin:
+                    response.headers.update({
+                        "access-control-allow-origin": origin if origin in origins else "*",
+                        "access-control-allow-methods": "*",
+                        "access-control-allow-headers": "*",
+                        "access-control-allow-credentials": "true",
+                        "access-control-max-age": "86400",
+                        "access-control-expose-headers": "*"
+                    })
                 
                 # Disable HTTPS enforcement headers for development
                 response.headers.update({
@@ -105,11 +117,9 @@ def create_app(config: Optional[Dict[str, Any]] = None) -> FastAPI:
 
     # Import and include routers
     from .proxy.endpoints import router as proxy_router
-    from .proxy.websocket import router as websocket_router
     from .ai.settings import router as ai_router
     
     app.include_router(proxy_router, prefix="/api/proxy")
-    app.include_router(websocket_router, prefix="/api/proxy")  # Mount WebSocket router under /api/proxy
     app.include_router(ai_router, prefix="/api", tags=["ai"])
 
     @app.on_event("startup")

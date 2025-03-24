@@ -21,6 +21,7 @@ import { Send as SendIcon, Delete as DeleteIcon, Security as SecurityIcon } from
 import axios from 'axios';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { WS_ENDPOINT } from '../../config';
+import { useUser } from '../../contexts/UserContext';
 
 interface WebSocketMessage {
     id: string;
@@ -67,6 +68,7 @@ interface SecurityReport {
 }
 
 export const WebSocketView: React.FC = () => {
+    const { wsConnected, isInitialized } = useUser();
     const [connections, setConnections] = useState<WebSocketConnection[]>([]);
     const [messages, setMessages] = useState<WebSocketMessage[]>([]);
     const [selectedConnection, setSelectedConnection] = useState<string | null>(null);
@@ -94,6 +96,8 @@ export const WebSocketView: React.FC = () => {
 
     const { isConnected, error, send } = useWebSocket<WSMessage>(WS_ENDPOINT, {
         onMessage: (data: WSMessage) => {
+            if (!isInitialized || !wsConnected) return; // Don't process messages until initialized
+
             if (data.type === 'connection_list') {
                 setConnections(data.data);
                 setLoading(false);
@@ -153,16 +157,14 @@ export const WebSocketView: React.FC = () => {
         }
     };
 
-    // Initial data loading is not needed as it will come through WebSocket
-
-    // Show loading state while WebSocket connects
-    if (!isConnected) {
+    // Show loading state while initializing
+    if (!isInitialized || !wsConnected) {
         return (
-            <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '70vh' }}>
+            <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '70vh' }}>
                 <Paper sx={{ p: 3, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2 }}>
                     <CircularProgress />
                     <Typography color="textSecondary">
-                        Connecting to WebSocket server...
+                        {!isInitialized ? 'Initializing...' : 'Connecting to WebSocket server...'}
                     </Typography>
                 </Paper>
             </Box>

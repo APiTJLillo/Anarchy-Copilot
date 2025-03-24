@@ -33,6 +33,7 @@ from proxy.models import ProxySessionData
 from sqlalchemy import text, select
 from proxy.session import get_active_sessions
 from ..custom_protocol import TunnelProtocol
+from ..types import ConnectionManagerProtocol
 
 logger = logging.getLogger("proxy.core")
 logger.setLevel(logging.DEBUG)
@@ -183,47 +184,22 @@ class HttpsInterceptProtocol(BaseProxyProtocol):
     _ca_initialized: ClassVar[bool] = False
     _initialization_lock: ClassVar[asyncio.Lock] = asyncio.Lock()
 
-    def __init__(self, *, connection_id: str, target_host: str, target_port: int,
-                 ca: Any, cert_manager: Any, db_interceptor: Any,
-                 client_transport: Optional[asyncio.Transport] = None):
+    def __init__(self, connection_id: str, connection_manager: ConnectionManagerProtocol):
         """Initialize HTTPS intercept protocol.
         
         Args:
             connection_id: Unique connection identifier
-            target_host: Target host to connect to
-            target_port: Target port to connect to
-            ca: Certificate authority instance
-            cert_manager: Certificate manager instance
-            db_interceptor: Database interceptor instance
-            client_transport: Optional client transport
+            connection_manager: Connection manager instance
         """
         super().__init__(connection_id)
         self.connection_id = connection_id
-        self._target_host = target_host
-        self._target_port = target_port
-        self._ca_instance = ca  # Store CA instance
-        self.cert_manager = cert_manager
-        self.db_interceptor = db_interceptor
-        self._client_context = None
-        self._server_context = None
-        self._client_ssl = None
-        self._server_writer = None
-        self._server_protocol = None
-        self._tunnel_established = False
-        self._client_hello_received = False
-        self._server_hello_received = False
-        self._handshake_complete = False
-        self._closed = False
-        self._buffer = bytearray()
-        self.transport = client_transport
-        self.target_host = target_host
-        self.target_port = target_port
-        self.loop = asyncio.get_running_loop()
-        self.logger = logging.getLogger("proxy.core")
-        self._first_tls_record = None
-        self._target_transport = None
-        self._target_protocol = None
-        self._connect_request_complete = False
+        self.connection_manager = connection_manager
+        self.transport: Optional[asyncio.Transport] = None
+        self.remote_transport: Optional[asyncio.Transport] = None
+        self.remote_protocol: Optional[asyncio.Protocol] = None
+        self.peername: Optional[tuple] = None
+        self.ssl_context: Optional[ssl.SSLContext] = None
+        self.tls_info: Dict[str, Any] = {}
         
         # Initialize state management
         self.state_manager = StateManager(connection_id)
@@ -245,6 +221,12 @@ class HttpsInterceptProtocol(BaseProxyProtocol):
         """Handle new connection."""
         super().connection_made(transport)
         self.transport = transport
+        self.peername = transport.get_extra_info('peername')
+        
+        # Create connection tracking entry
+        self.connection_manager.create_connection(self.connection_id, transport)
+        logger.debug(f"New HTTPS connection from {self.peername}")
+        
         self._tunnel_established = False
         self._client_handshake_complete = False
         self._target_handshake_complete = False
@@ -258,7 +240,29 @@ class HttpsInterceptProtocol(BaseProxyProtocol):
         self._server_context = None
         self._client_context = None
         self._buffer = bytearray()
-        logger.debug(f"[{self.connection_id}] Connection established")
+        self.target_host = None
+        self.target_port = None
+        self.loop = asyncio.get_running_loop()
+        self._first_tls_record = None
+        self._target_transport = None
+        self._target_protocol = None
+        self._connect_request_complete = False
+        
+        # Initialize state management
+        self.state_manager = StateManager(connection_id)
+        self.error_handler = ErrorHandler(connection_id)
+        self.buffer_manager = BufferManager()
+        self.tls_handler = TlsHandler(
+            connection_id=self.connection_id,
+            state_handler=self.state_manager,
+            error_handler=self.error_handler
+        )
+        
+        # Initialize handlers
+        self._connect_handler = None
+        self._http_handler = None
+        
+        self.logger.debug(f"[{self.connection_id}] TLS handler initialized")
 
     def data_received(self, data: bytes) -> None:
         """Handle received data."""

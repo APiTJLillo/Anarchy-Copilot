@@ -1,5 +1,5 @@
-"""Core SQLAlchemy models."""
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, JSON, Boolean, Text, Enum
+"""Core models for the application."""
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, JSON, Boolean, Table, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -10,43 +10,34 @@ from api.proxy.database_models import ProxySession
 from models.vulnerability import Vulnerability, VulnerabilityResult
 
 class User(Base):
+    """User model."""
     __tablename__ = "users"
 
     id = Column(Integer, primary_key=True)
-    username = Column(String, unique=True, nullable=True)
-    email = Column(String, unique=True, nullable=True)
-    hashed_password = Column(String, nullable=True)
+    username = Column(String, unique=True, nullable=False)
+    email = Column(String, unique=True, nullable=False)
+    password_hash = Column(String, nullable=False)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
-    last_login = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    # Relationships
-    owned_projects = relationship("Project", back_populates="owner", foreign_keys="Project.owner_id")
-    collaborating_projects = relationship(
-        "Project",
-        secondary=project_collaborators,
-        back_populates="collaborators"
-    )
+    projects = relationship("Project", back_populates="owner")
 
 class Project(Base):
+    """Project model."""
     __tablename__ = "projects"
 
     id = Column(Integer, primary_key=True)
-    name = Column(String, nullable=True)
-    description = Column(Text, nullable=True)
-    scope = Column(JSON, nullable=True)
-    owner_id = Column(Integer, ForeignKey("users.id"), nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now())
+    name = Column(String, nullable=False)
+    description = Column(Text)
+    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    scope = Column(JSON, default=dict)
     is_archived = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
-    # Relationships
-    owner = relationship("User", back_populates="owned_projects", foreign_keys=[owner_id])
-    collaborators = relationship(
-        "User",
-        secondary=project_collaborators,
-        back_populates="collaborating_projects"
-    )
+    owner = relationship("User", back_populates="projects")
+    collaborators = relationship("User", secondary=project_collaborators, lazy="selectin")
     proxy_sessions = relationship("ProxySession", back_populates="project")
     recon_modules = relationship("ReconModule", back_populates="project")
     recon_targets = relationship("ReconTarget", back_populates="project")

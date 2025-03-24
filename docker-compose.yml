@@ -3,6 +3,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dev
+    networks:
+      - anarchy-copilot
     volumes:
       - type: bind
         source: .
@@ -29,7 +31,7 @@ services:
       - ANARCHY_API_TITLE=Anarchy Copilot API
       - ANARCHY_API_VERSION=0.1.0
       - ANARCHY_DEBUG=true
-      - ANARCHY_CORS_ORIGINS=http://localhost:3000,ws://localhost:3000,http://localhost:8000,ws://localhost:8000,http://dev:8000,ws://dev:8000
+      - ANARCHY_CORS_ORIGINS=http://localhost:3000,ws://localhost:3000,http://localhost:8000,ws://localhost:8000,http://localhost:8083,ws://localhost:8083,http://dev:8000,ws://dev:8000,http://proxy:8083,ws://proxy:8083
       # Proxy Settings (only for client configuration)
       - ANARCHY_PROXY_HOST=proxy
       - ANARCHY_PROXY_PORT=8083
@@ -39,15 +41,17 @@ services:
     command: [ "start" ]
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:8000/api/proxy/health" ]
-      interval: 5s
+      interval: 10s
       timeout: 10s
       retries: 5
-      start_period: 30s
+      start_period: 10s
 
   proxy:
     build:
       context: .
       dockerfile: Dockerfile.dev
+    networks:
+      - anarchy-copilot
     entrypoint: [ "/usr/local/bin/proxy-entrypoint.sh" ]
     command: [ "start" ]
     volumes:
@@ -68,6 +72,8 @@ services:
       - DEBUG=1
       - CA_CERT_PATH=/app/certs/ca.crt
       - CA_KEY_PATH=/app/certs/ca.key
+      - DOCKER_ENV=1
+      - ANARCHY_DEV_HOST=dev
       # Database settings
       - SQLALCHEMY_DATABASE_URL=sqlite+aiosqlite:///./data/proxy.db
       # Proxy Settings
@@ -80,15 +86,17 @@ services:
       - ANARCHY_PROXY_KEEPALIVE_TIMEOUT=30
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://dev:8000/api/proxy/health" ]
-      interval: 30s
-      timeout: 5s
-      retries: 3
+      interval: 10s
+      timeout: 10s
+      retries: 5
       start_period: 10s
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile.frontend
+    networks:
+      - anarchy-copilot
     volumes:
       - type: bind
         source: ./frontend/src
@@ -119,7 +127,12 @@ services:
       interval: 10s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 10s
+
+networks:
+  anarchy-copilot:
+    name: anarchy-copilot_network
+    driver: bridge
 
 volumes:
   dev-cache:

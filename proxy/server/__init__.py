@@ -13,6 +13,7 @@ from .logging_middleware import LoggingMiddleware, LoggingMiddlewareFactory
 from .proxy_server import ProxyServer
 from .tunneling import TunnelManager
 from .tls_helper import cert_manager
+from .app import app
 
 __version__ = '1.0.0'
 
@@ -24,7 +25,8 @@ __all__ = [
     'TunnelManager',
     'proxy_middleware',
     'ProxyResponse',
-    '__version__'
+    '__version__',
+    'app'
 ]
 
 # Initialize package-level logger

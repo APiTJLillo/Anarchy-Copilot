@@ -8,14 +8,19 @@ This package provides comprehensive WebSocket support including:
 - Pattern matching and validation
 """
 
-from .types import WSMessageType, WSMessage
+from .types import MessageType, MessageDirection, WSMessage
 from .conversation import WSConversation
 from .interceptor import WebSocketInterceptor, DebugInterceptor, SecurityInterceptor, RateLimitInterceptor
 from .manager import WebSocketManager
-from .fuzzing import WSFuzzer
+from .fuzzer import WSFuzzer
+from .routes import create_router
+
+# Create global WebSocket manager instance
+ws_manager = WebSocketManager()
 
 __all__ = [
-    'WSMessageType',
+    'MessageType',
+    'MessageDirection',
     'WSMessage',
     'WSConversation',
     'WebSocketInterceptor',
@@ -23,5 +28,7 @@ __all__ = [
     'SecurityInterceptor',
     'RateLimitInterceptor',
     'WebSocketManager',
-    'WSFuzzer'
+    'WSFuzzer',
+    'create_router',
+    'ws_manager'
 ]

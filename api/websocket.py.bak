@@ -1,0 +1,308 @@
+"""WebSocket endpoint handlers."""
+import asyncio
+import logging
+import json
+import time
+import os
+from typing import Optional, Dict, Any
+from datetime import datetime
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from .proxy.connection import connection_manager, ConnectionType, Connection
+from .proxy.state import proxy_state
+from .proxy.websocket import WebSocket as ProxyWebSocket
+from .database import get_db
+from proxy.websocket.types import WSMessage as WebSocketMessage, MessageDirection, MessageType
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter()
+
+HEARTBEAT_INTERVAL = int(os.getenv('ANARCHY_WS_HEARTBEAT_INTERVAL', '15'))  # seconds
+HEALTH_CHECK_INTERVAL = 5  # seconds
+CONNECTION_TIMEOUT = 30  # seconds
+MAX_RETRIES = 5
+
+async def verify_proxy_state():
+    """Verify that the proxy state is initialized."""
+    if not proxy_state.connection_manager:
+        logger.warning("[WebSocket] Proxy state not initialized")
+        return False
+    return True
+
+async def authorize_internal_connection(websocket: WebSocket) -> bool:
+    """Authorize internal WebSocket connection by validating required headers."""
+    logger.debug(f"[WebSocket] Validating headers for internal connection: {dict(websocket.headers)}")
+
+    # First verify protocol
+    protocol = websocket.headers.get("sec-websocket-protocol")
+    if protocol != "proxy-internal":
+        logger.warning("[WebSocket] Invalid protocol for internal connection")
+        logger.warning(f"[WebSocket] Expected 'proxy-internal', got '{protocol}'")
+        # More permissive - don't close the connection for protocol mismatch
+        if protocol:  # If there's any protocol, accept it
+            return True
+        await websocket.close(code=1002, reason="Invalid protocol")
+        return False
+
+    # Check for required headers - more permissive now
+    required_headers = {
+        'x-connection-type': 'internal',
+    }
+
+    for header, value in required_headers.items():
+        header_value = websocket.headers.get(header.lower())
+        if not header_value:
+            logger.warning(f"[WebSocket] Missing header: {header}")
+            # Don't close the connection, just log the warning
+            continue
+        if header_value != value:
+            logger.warning(f"[WebSocket] Invalid header value for {header}: {header_value}")
+            # Don't close the connection, just log the warning
+            continue
+
+    # Accept the connection regardless of header validation
+    logger.info("[WebSocket] Internal connection authorized")
+    return True
+
+async def send_status_update(websocket: WebSocket, connection_id: str):
+    """Send status update to client."""
+    try:
+        status = await proxy_state.get_status()
+        await websocket.send_json({
+            "type": "status_update",
+            "data": status,
+            "timestamp": datetime.utcnow().isoformat()
+        })
+        logger.debug(f"[WebSocket] Sent status update to {connection_id}")
+    except Exception as e:
+        logger.error(f"[WebSocket] Error sending status update to {connection_id}: {e}")
+        raise
+
+@router.websocket("/")
+async def handle_ui_connection(websocket: WebSocket):
+    """Handle WebSocket connections from UI clients."""
+    logger.debug(f"[WebSocket] New UI connection request received:")
+    logger.debug(f"[WebSocket] Headers: {dict(websocket.headers)}")
+    logger.debug(f"[WebSocket] URL Path: {websocket.url.path}")
+    logger.debug(f"[WebSocket] Client Host: {websocket.client.host}:{websocket.client.port}")
+    connection_id = None
+    
+    try:
+        await verify_proxy_state()
+        await websocket.accept()
+        connection_id = await connection_manager.connect(websocket, ConnectionType.UI.value)
+        logger.info(f"[WebSocket] New UI connection established: {connection_id}")
+
+        # Send initial state
+        initial_state = {
+            "type": "test_connection_response",
+            "status": "ok",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+        await websocket.send_json(initial_state)
+        logger.debug(f"[WebSocket] Sent initial state to {connection_id}")
+
+        while True:
+            try:
+                data = await websocket.receive_json()
+                logger.debug(f"[WebSocket] Received message from {connection_id}: {data}")
+                
+                message_type = data.get("type")
+                channel = data.get("channel", "proxy")
+
+                if message_type == "heartbeat":
+                    # Update proxy state's last heartbeat timestamp
+                    proxy_state.last_heartbeat = time.time()
+                    proxy_state.is_running = True
+                    await websocket.send_json({
+                        "type": "heartbeat_response",
+                        "channel": channel,
+                        "status": "ok",
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
+                    continue
+
+                if message_type == "get_status":
+                    await send_status_update(websocket, connection_id)
+                    continue
+
+                # Forward message to internal connections
+                await connection_manager.broadcast_json(data, connection_type=ConnectionType.INTERNAL.value)
+
+            except WebSocketDisconnect:
+                logger.info(f"[WebSocket] UI client disconnected: {connection_id}")
+                break
+            except Exception as e:
+                logger.error(f"[WebSocket] Error handling message from {connection_id}: {e}")
+                await websocket.send_json({
+                    "type": "error",
+                    "error": str(e)
+                })
+
+    except HTTPException as e:
+        logger.warning(f"[WebSocket] Connection rejected: {e.detail}")
+        if websocket.client_state == WebSocket.CLIENT.CONNECTED:
+            await websocket.close(code=e.status_code, reason=e.detail)
+    except Exception as e:
+        logger.error(f"[WebSocket] Error handling UI connection: {e}")
+        if websocket.client_state == WebSocket.CLIENT.CONNECTED:
+            await websocket.close(code=1011, reason="Internal server error")
+    finally:
+        if connection_id:
+            await connection_manager.disconnect(connection_id)
+
+@router.websocket("/internal")
+async def handle_internal_connection(websocket: WebSocket, db: AsyncSession = Depends(get_db)):
+    """Handle internal WebSocket connections from dev container."""
+    logger.debug(f"[WebSocket] New internal connection request received:")
+    logger.debug(f"[WebSocket] Headers: {dict(websocket.headers)}")
+    logger.debug(f"[WebSocket] URL Path: {websocket.url.path}")
+    logger.debug(f"[WebSocket] Client Host: {websocket.client.host}:{websocket.client.port}")
+    logger.debug(f"[WebSocket] Protocol: {websocket.headers.get('sec-websocket-protocol')}")
+    
+    ws = WebSocket(websocket)
+    connection_id = None
+    keepalive_task = None
+    
+    try:
+        # Authorization check before accepting connection
+        if not await authorize_internal_connection(websocket):
+            return
+
+        # If authorization passed, accept the connection without requiring a specific subprotocol
+        try:
+            # Try to accept with the protocol if it exists
+            protocol = websocket.headers.get("sec-websocket-protocol")
+            if protocol:
+                await websocket.accept(subprotocol=protocol)
+            else:
+                await websocket.accept()
+            logger.info("[WebSocket] Internal connection accepted")
+        except Exception as e:
+            logger.error(f"[WebSocket] Error accepting connection: {e}")
+            # Try again without specifying a subprotocol
+            await websocket.accept()
+            logger.info("[WebSocket] Internal connection accepted (fallback)")
+        
+        # Then verify proxy state is initialized
+        if not await verify_proxy_state():
+            logger.warning("[WebSocket] Proxy state not initialized")
+            await websocket.close(code=1011, reason="Proxy state not initialized")
+            return
+        
+        # Register with connection manager
+        connection_id = await connection_manager.connect(ws, "internal")
+        logger.info(f"[WebSocket] New internal connection established: {connection_id}")
+
+        # Set proxy state to running since we have a valid internal connection
+        proxy_state.is_running = True
+        proxy_state.last_heartbeat = time.time()
+
+        # Send initial state
+        initial_state = {
+            "type": "initial_data",
+            "data": {
+                "status": {
+                    "proxy_running": proxy_state.is_running,
+                    "version": proxy_state.version
+                }
+            }
+        }
+        await websocket.send_json(initial_state)
+        logger.debug(f"[WebSocket] Sent initial state to {connection_id}")
+
+        # Start keepalive task
+        async def send_keepalive():
+            while True:
+                try:
+                    await websocket.send_json({
+                        "type": "heartbeat",
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "connection_id": connection_id
+                    })
+                    await asyncio.sleep(HEARTBEAT_INTERVAL)
+                except Exception as e:
+                    logger.error(f"[WebSocket] Keepalive error: {e}")
+                    break
+
+        keepalive_task = asyncio.create_task(send_keepalive())
+
+        while True:
+            try:
+                data = await websocket.receive_json()
+                logger.debug(f"[WebSocket] Received internal message from {connection_id}: {data}")
+                
+                message_type = data.get("type")
+                if message_type == "test_connection":
+                    await websocket.send_json({
+                        "type": "test_connection_response",
+                        "status": "ok",
+                        "timestamp": datetime.utcnow().isoformat()
+                    })
+                    continue
+
+                elif message_type == "heartbeat":
+                    # Update proxy state's last heartbeat timestamp
+                    proxy_state.last_heartbeat = time.time()
+                    proxy_state.is_running = True
+                    await websocket.send_json({
+                        "type": "heartbeat_response",
+                        "timestamp": datetime.utcnow().isoformat(),
+                        "connection_id": connection_id
+                    })
+                    continue
+
+                # Broadcast message to UI clients
+                await connection_manager.broadcast_json(data, connection_type="ui")
+
+            except WebSocketDisconnect:
+                logger.info(f"[WebSocket] Internal connection disconnected: {connection_id}")
+                break
+            except Exception as e:
+                logger.error(f"[WebSocket] Error handling message from {connection_id}: {e}")
+                if not isinstance(e, asyncio.CancelledError):
+                    try:
+                        await websocket.send_json({
+                            "type": "error",
+                            "message": str(e)
+                        })
+                    except:
+                        break
+
+    except Exception as e:
+        logger.error(f"[WebSocket] Error handling internal connection: {e}")
+        if websocket.client_state == WebSocket.CLIENT.CONNECTED:
+            await websocket.close(code=1011, reason=str(e))
+    finally:
+        # Clean up connection
+        if keepalive_task:
+            keepalive_task.cancel()
+        if connection_id:
+            await connection_manager.disconnect(ws, "internal")
+            logger.info(f"[WebSocket] Connection closed: {connection_id}")
+            # Update proxy state when internal connection is lost
+            proxy_state.is_running = False
+        else:
+            logger.info("[WebSocket] Unregistered connection closed")
+
+@router.get("/stats")
+async def get_ws_stats():
+    """Get WebSocket connection statistics."""
+    stats = connection_manager.get_stats()
+    connections = connection_manager.get_active_connections()
+    
+    return {
+        "stats": stats,
+        "connections": [
+            {
+                "id": conn.id,
+                "type": conn.type,
+                "connected_at": conn.connected_at.isoformat(),
+                "last_activity": conn.last_activity.isoformat(),
+                "message_count": conn.message_count,
+            }
+            for conn in connections
+        ]
+    }

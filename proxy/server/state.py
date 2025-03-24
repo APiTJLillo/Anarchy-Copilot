@@ -1,123 +1,132 @@
-"""Proxy state tracking and monitoring."""
+"""Global proxy state management."""
+from datetime import datetime
 import asyncio
 import logging
-from datetime import datetime, timezone
-from typing import Dict, Any, Optional, List, Protocol
+import time
+from typing import Dict, Any, Optional, List
+
+from api.proxy.models import ConnectionInfo
+from .types import ConnectionManagerProtocol
 
 logger = logging.getLogger("proxy.core")
 
-class ConnectionEventBroadcaster(Protocol):
-    """Interface for broadcasting connection events."""
-    async def broadcast_connection_update(self, connection: Any) -> None:
-        """Broadcast connection updates to all connected clients."""
-        ...
-
-    async def broadcast_connection_closed(self, connection_id: str) -> None:
-        """Broadcast when a connection is closed."""
-        ...
-
 class ProxyState:
-    """Track proxy state information."""
-
-    _instance = None
-    _initialized = False
-
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super().__new__(cls)
-        return cls._instance
-
+    """Manages global proxy state and broadcasts updates."""
+    
     def __init__(self):
-        if not ProxyState._initialized:
-            self._connections: Dict[str, Dict[str, Any]] = {}
-            self._active_sessions: Dict[str, Dict[str, Any]] = {}
-            self._stats: Dict[str, Any] = {
-                "start_time": datetime.now(timezone.utc),
-                "total_connections": 0,
-                "active_connections": 0,
-                "total_bytes_sent": 0,
-                "total_bytes_received": 0,
-                "connection_errors": 0
-            }
-            self._lock = asyncio.Lock()
-            self._event_broadcaster: Optional[ConnectionEventBroadcaster] = None
-            ProxyState._initialized = True
-
-    def set_event_broadcaster(self, broadcaster: ConnectionEventBroadcaster) -> None:
-        """Set the event broadcaster for connection updates."""
-        self._event_broadcaster = broadcaster
-
-    async def add_connection(self, conn_id: str, info: Dict[str, Any]) -> None:
-        """Add a new connection to tracking."""
-        async with self._lock:
-            self._connections[conn_id] = {
-                **info,
-                "created_at": datetime.now(timezone.utc),
-                "status": "initializing"
-            }
-            self._stats["total_connections"] += 1
-            self._stats["active_connections"] += 1
-            if self._event_broadcaster:
-                await self._event_broadcaster.broadcast_connection_update(info)
-            logger.debug(f"Added connection {conn_id} to state tracking")
-
-    async def remove_connection(self, conn_id: str) -> None:
-        """Remove a connection from tracking."""
-        async with self._lock:
-            if conn_id in self._connections:
-                conn_info = self._connections.pop(conn_id)
-                self._stats["active_connections"] -= 1
-                # Update transfer stats
-                self._stats["total_bytes_sent"] += conn_info.get("bytes_sent", 0)
-                self._stats["total_bytes_received"] += conn_info.get("bytes_received", 0)
-                if conn_info.get("error"):
-                    self._stats["connection_errors"] += 1
-                if self._event_broadcaster:
-                    await self._event_broadcaster.broadcast_connection_closed(conn_id)
-                logger.debug(f"Removed connection {conn_id} from state tracking")
-
-    async def update_connection(self, conn_id: str, key: str, value: Any) -> None:
-        """Update a specific connection attribute."""
-        async with self._lock:
-            if conn_id in self._connections:
-                self._connections[conn_id][key] = value
-                if self._event_broadcaster:
-                    await self._event_broadcaster.broadcast_connection_update(self._connections[conn_id])
-
-    async def get_connection_info(self, conn_id: str) -> Optional[Dict[str, Any]]:
-        """Get information about a specific connection."""
-        async with self._lock:
-            return self._connections.get(conn_id)
-
-    async def get_all_connections(self) -> Dict[str, Dict[str, Any]]:
-        """Get all current connection information."""
-        async with self._lock:
-            return self._connections.copy()
-
-    async def get_stats(self) -> Dict[str, Any]:
-        """Get current proxy statistics."""
-        async with self._lock:
-            # Calculate uptime
-            uptime = (datetime.now(timezone.utc) - self._stats["start_time"]).total_seconds()
-            stats = self._stats.copy()
-            stats["uptime_seconds"] = uptime
-            return stats
-
-    def connection_exists(self, conn_id: str) -> bool:
-        """Check if a connection exists."""
-        return conn_id in self._connections
-
-    async def reset_stats(self) -> None:
-        """Reset statistics counters."""
-        async with self._lock:
-            self._stats.update({
-                "total_connections": len(self._connections),
-                "active_connections": len(self._connections),
-                "total_bytes_sent": 0,
-                "total_bytes_received": 0,
-                "connection_errors": 0
+        self._active_connections: Dict[str, Dict[str, Any]] = {}
+        self._connection_manager: Optional[ConnectionManagerProtocol] = None
+        self._update_callbacks: List[callable] = []
+        self._startup_time = datetime.utcnow()
+        self.last_heartbeat = time.time()
+        self.is_running = True
+        
+        # Version information
+        self.version = {
+            "version": "0.1.0",
+            "name": "Anarchy Copilot",
+            "api_compatibility": "0.1.0"
+        }
+        
+        # Health check state
+        self.running = True  # Alias for is_running for compatibility
+        self.initialized = False
+        self.last_health_check = time.time()
+        self.health_check_interval = 5.0  # seconds
+        
+    def set_connection_manager(self, manager: ConnectionManagerProtocol) -> None:
+        """Set the connection manager instance."""
+        self._connection_manager = manager
+        self.initialized = True
+        
+    def register_update_callback(self, callback: callable) -> None:
+        """Register a callback for state updates."""
+        if callback not in self._update_callbacks:
+            self._update_callbacks.append(callback)
+            
+    def unregister_update_callback(self, callback: callable) -> None:
+        """Unregister an update callback."""
+        if callback in self._update_callbacks:
+            self._update_callbacks.remove(callback)
+            
+    async def broadcast_update(self, update_type: str, data: Any = None) -> None:
+        """Broadcast a state update to all registered callbacks."""
+        update = {
+            "type": update_type,
+            "timestamp": datetime.utcnow().isoformat(),
+            "data": data
+        }
+        
+        for callback in self._update_callbacks:
+            try:
+                await callback(update)
+            except Exception as e:
+                logger.error(f"Error in update callback: {e}")
+                
+    def get_active_connections(self) -> List[ConnectionInfo]:
+        """Get list of all active connections."""
+        if not self._connection_manager:
+            return []
+            
+        connections = []
+        for conn_id in self._active_connections:
+            info = self._connection_manager.get_connection_info(conn_id)
+            if info:
+                connections.append(info)
+        return connections
+        
+    async def add_connection(self, connection_id: str, info: Dict[str, Any]) -> None:
+        """Add a new connection to state."""
+        self._active_connections[connection_id] = info
+        await self.broadcast_update("connection_added", {
+            "id": connection_id,
+            "info": info
+        })
+        
+    async def update_connection(self, connection_id: str, key: str, value: Any) -> None:
+        """Update connection state."""
+        if connection_id in self._active_connections:
+            self._active_connections[connection_id][key] = value
+            await self.broadcast_update("connection_updated", {
+                "id": connection_id,
+                "key": key,
+                "value": value
             })
-            logger.debug("Reset proxy state statistics")
+            
+    async def remove_connection(self, connection_id: str) -> None:
+        """Remove a connection from state."""
+        if connection_id in self._active_connections:
+            del self._active_connections[connection_id]
+            await self.broadcast_update("connection_removed", {
+                "id": connection_id
+            })
+            
+    def get_status(self) -> Dict[str, Any]:
+        """Get current proxy state status."""
+        return {
+            "version": self.version,
+            "running": self.running,
+            "initialized": self.initialized,
+            "uptime": (datetime.utcnow() - self._startup_time).total_seconds(),
+            "last_heartbeat": self.last_heartbeat,
+            "last_health_check": self.last_health_check,
+            "connections": {
+                "active": len(self._active_connections),
+                "total": len(self._active_connections)
+            }
+        }
+        
+    def update_health_check(self) -> None:
+        """Update health check timestamp."""
+        self.last_health_check = time.time()
+        # Update running state based on heartbeat
+        current_time = time.time()
+        if current_time - self.last_heartbeat > self.health_check_interval * 2:
+            self.running = False
+            self.is_running = False
+        else:
+            self.running = True
+            self.is_running = True
 
 # Global instance
 proxy_state = ProxyState()

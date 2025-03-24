@@ -10,6 +10,9 @@ interface UserContextType {
     loadingUsers: boolean;
     loadingProjects: boolean;
     error: string | null;
+    wsConnected: boolean;
+    setWsConnected: (connected: boolean) => void;
+    isInitialized: boolean;
 }
 
 const UserContext = createContext<UserContextType>({
@@ -19,7 +22,10 @@ const UserContext = createContext<UserContextType>({
     setCurrentUser: () => { },
     loadingUsers: true,
     loadingProjects: true,
-    error: null
+    error: null,
+    wsConnected: false,
+    setWsConnected: () => { },
+    isInitialized: false
 });
 
 export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
@@ -29,6 +35,8 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const [loadingUsers, setLoadingUsers] = useState(true);
     const [loadingProjects, setLoadingProjects] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const [wsConnected, setWsConnected] = useState(false);
+    const [isInitialized, setIsInitialized] = useState(false);
     const proxyApi = useProxyApi();
 
     useEffect(() => {
@@ -70,7 +78,14 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 clearTimeout(timeoutId);
             }
         };
-    }, []); // Empty dependency array - only run once on mount
+    }, []);
+
+    // Track initialization state
+    useEffect(() => {
+        if (!loadingUsers && !loadingProjects && currentUser !== null) {
+            setIsInitialized(true);
+        }
+    }, [loadingUsers, loadingProjects, currentUser]);
 
     return (
         <UserContext.Provider value={{
@@ -80,7 +95,10 @@ export const UserProvider: React.FC<{ children: React.ReactNode }> = ({ children
             setCurrentUser,
             loadingUsers,
             loadingProjects,
-            error
+            error,
+            wsConnected,
+            setWsConnected,
+            isInitialized
         }}>
             {children}
         </UserContext.Provider>

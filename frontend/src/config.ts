@@ -31,21 +31,28 @@ export const PROXY_URL = process.env.REACT_APP_PROXY_URL || (isDocker ? 'http://
 /**
  * Get the WebSocket URL based on the current environment
  */
-export const getWebSocketUrl = () => {
+export const getWebSocketUrl = (isInternal: boolean = false) => {
     // First try the environment variable
     if (process.env.REACT_APP_WS_URL) {
-        return process.env.REACT_APP_WS_URL;
+        console.debug('[Config] Using WebSocket URL from environment:', process.env.REACT_APP_WS_URL);
+        return process.env.REACT_APP_WS_URL + (isInternal ? '/internal' : '');
     }
 
     // If we're in the browser, construct the URL based on the current window location
     if (typeof window !== 'undefined') {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
         const host = window.location.host;
-        return `${protocol}//${host}/api/proxy/ws`;
+        const path = isInternal ? '/api/proxy/ws/internal' : '/api/proxy/ws';
+        const url = `${protocol}//${host}${path}`;
+        console.debug('[Config] Using WebSocket URL from window location:', url);
+        return url;
     }
 
     // Fallback to default WebSocket endpoint
-    return WS_ENDPOINT;
+    const baseUrl = WS_ENDPOINT || 'ws://localhost:8000/api/proxy/ws';
+    const url = isInternal ? `${baseUrl}/internal` : baseUrl;
+    console.debug('[Config] Using fallback WebSocket URL:', url);
+    return url;
 };
 
 /**

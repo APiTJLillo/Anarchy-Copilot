@@ -27,12 +27,9 @@ import {
 import { useTheme } from '@mui/material/styles';
 import { formatDistanceToNow } from 'date-fns';
 import { useApi } from '../hooks/useApi';
-import { useWebSocket } from '../hooks/useWebSocket';
-import { getWebSocketUrl } from '../config';
+import useWebSocketChannel from '../hooks/useWebSocketChannel';
 
 // Constants
-const FETCH_INTERVAL = 30000; // 30 seconds between fetches
-const FETCH_COOLDOWN = 2000; // Minimum time between manual fetches
 const MAX_RETRIES = 3;
 const INITIAL_RETRY_DELAY = 1000;
 
@@ -137,6 +134,12 @@ interface HealthState {
     connections: Connection[];
 }
 
+interface HealthData {
+    status: string;
+    active_connections: number;
+    uptime: number;
+}
+
 // Helper function to safely format dates
 const formatDate = (date: string | Date): string => {
     try {
@@ -148,7 +151,17 @@ const formatDate = (date: string | Date): string => {
     }
 };
 
-const Health: React.FC = () => {
+// Add debug logging utility
+const debugLog = (message: string, data?: any) => {
+    const stack = new Error().stack?.split('\n').slice(2);
+    console.debug(`[Health Debug] ${message}`, {
+        timestamp: new Date().toISOString(),
+        stack,
+        ...data
+    });
+};
+
+const Health: React.FC = React.memo(() => {
     const theme = useTheme();
     const api = useApi();
     const [loading, setLoading] = useState(false);
@@ -156,220 +169,100 @@ const Health: React.FC = () => {
     const [healthState, setHealthState] = useState<HealthState>({
         services: [],
         metrics: null,
-        wsStatus: null,
+        wsStatus: {
+            ui: {
+                connected: false,
+                connectionCount: 0,
+                lastMessage: '',
+                messageCount: 0,
+                errorCount: 0,
+                active_connections: [],
+                connection_history: []
+            },
+            internal: {
+                connected: false,
+                connectionCount: 0,
+                lastMessage: '',
+                messageCount: 0,
+                errorCount: 0,
+                active_connections: [],
+                connection_history: []
+            },
+            connections: []
+        },
         connections: []
     });
+    const [healthData, setHealthData] = useState<HealthData | null>(null);
+    const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
-    // Refs for managing state
-    const mountedRef = useRef(true);
-    const lastFetchRef = useRef(Date.now() - FETCH_COOLDOWN); // Initialize to allow immediate fetch
-    const fetchInProgressRef = useRef(false);
-    const wsConnectedRef = useRef(false);
-    const initialDataLoadedRef = useRef(false);
+    // WebSocket connection using our hook
+    const { isConnected, error: wsError, send } = useWebSocketChannel('health', {
+        onMessage: (data) => {
+            if (!data) return;
+            console.debug('[Health] Received WebSocket message:', data);
 
-    // Fetch data with error handling and state management
-    const fetchHealthData = useCallback(async (force = false) => {
-        // Skip fetch if conditions aren't met
-        if (
-            !mountedRef.current ||
-            fetchInProgressRef.current ||
-            (!force && Date.now() - lastFetchRef.current < FETCH_COOLDOWN) ||
-            (!force && initialDataLoadedRef.current && wsConnectedRef.current)
-        ) {
-            return;
-        }
-
-        try {
-            fetchInProgressRef.current = true;
-            if (!initialDataLoadedRef.current) {
-                setLoading(true);
-            }
-
-            const [healthData, metricsData, wsData] = await Promise.all([
-                api.get('/health/services'),
-                api.get('/health/metrics'),
-                api.get('/health/websocket-status')
-            ]);
-
-            if (!mountedRef.current) return;
-
-            setHealthState(prev => ({
-                services: [
-                    ...healthData.data.services,
-                    {
-                        name: 'WebSocket',
-                        status: wsData.data.ui.connected ? 'healthy' : 'down',
-                        lastCheck: new Date().toISOString(),
-                        details: wsData.data.ui.connected ? 'Connected' : 'Disconnected'
+            try {
+                if (data.type === 'health_update' || data.type === 'initial_data') {
+                    console.debug('[Health] Processing health data:', data.data);
+                    setHealthState(prevState => ({
+                        ...prevState,
+                        services: data.data.services || [],
+                        metrics: data.data.metrics,
+                        wsStatus: data.data.wsStatus,
+                        connections: data.data.connections || []
+                    }));
+                    setLastUpdate(new Date());
+                    if (data.type === 'initial_data') {
+                        setLoading(false);
                     }
-                ],
-                metrics: metricsData.data,
-                wsStatus: wsData.data,
-                connections: wsData.data.connections || []
-            }));
-
-            initialDataLoadedRef.current = true;
-            lastFetchRef.current = Date.now();
-            setError(null);
-        } catch (err) {
-            if (!mountedRef.current) return;
-            console.error('Health data fetch error:', err);
-            setError('Failed to fetch health data');
-        } finally {
-            fetchInProgressRef.current = false;
-            setLoading(false);
-        }
-    }, [api]);
-
-    // Memoize WebSocket handlers
-    const wsHandlers = useMemo(() => ({
-        onMessage: (data: any) => {
-            if (!mountedRef.current) return;
-
-            if (data.type === 'health_update') {
-                setHealthState(prev => ({
-                    ...prev,
-                    ...data.data
-                }));
-            }
-        },
-        onOpen: () => {
-            if (!mountedRef.current) return;
-            wsConnectedRef.current = true;
-            setError(null);
-            // Only fetch initial data if we haven't already
-            if (!initialDataLoadedRef.current) {
-                fetchHealthData(true);
-            }
-        },
-        onClose: () => {
-            if (!mountedRef.current) return;
-            wsConnectedRef.current = false;
-            // Don't update state if we're unmounted
-            setHealthState(prev => ({
-                ...prev,
-                wsStatus: prev.wsStatus ? {
-                    ...prev.wsStatus,
-                    ui: { ...prev.wsStatus.ui, connected: false }
-                } : null
-            }));
-        }
-    }), [fetchHealthData]);
-
-    // WebSocket integration
-    const { isConnected, send: sendJsonMessage } = useWebSocket(getWebSocketUrl(), {
-        ...wsHandlers,
-        keepAlive: true,
-        reconnectAttempts: 5,
-        reconnectInterval: 3000,
-        onOpen: () => {
-            if (!mountedRef.current) return;
-            wsConnectedRef.current = true;
-            setError(null);
-            // Send initial connection message
-            sendJsonMessage({
-                type: "test_connection"
-            });
-            // Only fetch initial data if we haven't already
-            if (!initialDataLoadedRef.current) {
-                fetchHealthData(true);
-            }
-        },
-        onMessage: (data: any) => {
-            if (!mountedRef.current) return;
-
-            if (data.type === 'test_connection_response') {
-                console.log('Test connection successful');
-                return;
-            }
-
-            if (data.type === 'health_update') {
-                setHealthState(prev => ({
-                    ...prev,
-                    ...data.data
-                }));
+                }
+            } catch (err) {
+                console.error('Error handling WebSocket message:', err);
+                setError('Failed to process health update');
             }
         }
     });
 
-    // Component lifecycle
+    // Request initial data when WebSocket connects
     useEffect(() => {
-        mountedRef.current = true;
-        wsConnectedRef.current = false;
-        initialDataLoadedRef.current = false;
-
-        // Initial fetch only if WebSocket isn't connected
-        if (!isConnected) {
-            fetchHealthData(true);
+        if (isConnected) {
+            setLoading(true);
+            console.debug('[Health] Requesting initial data');
+            send({
+                type: 'get_initial_data',
+                channel: 'health'
+            });
         }
+    }, [isConnected, send]);
+
+    // Set up periodic health updates
+    useEffect(() => {
+        if (!isConnected) return;
+
+        console.debug('[Health] Setting up periodic updates');
+        const updateInterval = setInterval(() => {
+            console.debug('[Health] Requesting health update');
+            send({
+                type: 'get_health_data',
+                channel: 'health'
+            });
+        }, 5000); // Update every 5 seconds
 
         return () => {
-            mountedRef.current = false;
-            wsConnectedRef.current = false;
-            initialDataLoadedRef.current = false;
+            console.debug('[Health] Cleaning up periodic updates');
+            clearInterval(updateInterval);
         };
-    }, [fetchHealthData, isConnected]);
-
-    // Polling effect - only active when WebSocket is disconnected
-    useEffect(() => {
-        if (!mountedRef.current || isConnected) return;
-
-        const intervalId = setInterval(() => {
-            if (mountedRef.current && !wsConnectedRef.current) {
-                fetchHealthData(false);
-            }
-        }, FETCH_INTERVAL);
-
-        return () => clearInterval(intervalId);
-    }, [fetchHealthData, isConnected]);
+    }, [isConnected, send]);
 
     // Manual refresh handler
-    const handleRefresh = useCallback(async () => {
-        if (loading) {
-            return;
+    const handleRefresh = useCallback(() => {
+        if (isConnected) {
+            send({
+                type: 'get_health_data',
+                channel: 'health'
+            });
         }
-
-        setLoading(true);
-        fetchInProgressRef.current = true;
-
-        try {
-            const [healthData, metricsData, wsData] = await Promise.all([
-                api.get('/health/services'),
-                api.get('/health/metrics'),
-                api.get('/health/websocket-status')
-            ]);
-
-            if (!mountedRef.current) return;
-
-            setHealthState(prev => ({
-                services: [
-                    ...healthData.data.services,
-                    {
-                        name: 'WebSocket',
-                        status: wsData.data.ui.connected ? 'healthy' : 'down',
-                        lastCheck: new Date().toISOString(),
-                        details: wsData.data.ui.connected ? 'Connected' : 'Disconnected'
-                    }
-                ],
-                metrics: metricsData.data,
-                wsStatus: wsData.data,
-                connections: wsData.data.connections || []
-            }));
-
-            lastFetchRef.current = Date.now();
-            setError(null);
-        } catch (err) {
-            console.error('Manual refresh error:', err);
-            if (mountedRef.current) {
-                setError('Failed to refresh health data');
-            }
-        } finally {
-            if (mountedRef.current) {
-                setLoading(false);
-                fetchInProgressRef.current = false;
-            }
-        }
-    }, [api, loading]);
+    }, [isConnected, send]);
 
     const getStatusColor = (status: string) => {
         switch (status) {
@@ -411,20 +304,22 @@ const Health: React.FC = () => {
                 <Typography variant="h4">System Health</Typography>
                 <span>
                     <Tooltip title={loading ? 'Refreshing...' : 'Refresh'}>
-                        <IconButton
-                            onClick={handleRefresh}
-                            disabled={loading}
-                            sx={{ opacity: loading ? 0.7 : 1 }}
-                        >
-                            {loading ? <CircularProgress size={24} /> : <RefreshIcon />}
-                        </IconButton>
+                        <span>
+                            <IconButton
+                                onClick={handleRefresh}
+                                disabled={loading || !isConnected}
+                                sx={{ opacity: loading ? 0.7 : 1 }}
+                            >
+                                {loading ? <CircularProgress size={24} /> : <RefreshIcon />}
+                            </IconButton>
+                        </span>
                     </Tooltip>
                 </span>
             </Box>
 
-            {error && (
+            {(error || wsError) && (
                 <Alert severity="error" sx={{ mb: 2 }}>
-                    {error}
+                    {error || (wsError && 'Unable to establish WebSocket connection. Some real-time updates may be unavailable.')}
                 </Alert>
             )}
 
@@ -718,8 +613,25 @@ const Health: React.FC = () => {
                     </Grid>
                 )}
             </Grid>
+
+            {lastUpdate && (
+                <Typography variant="body2" color="text.secondary" mt={1}>
+                    Last Update: {lastUpdate.toLocaleTimeString()}
+                </Typography>
+            )}
+
+            {healthState && (
+                <Box display="flex" justifyContent="space-between" alignItems="center" mt={3}>
+                    <Typography variant="h6">System Status</Typography>
+                    <div className="space-x-2">
+                        <Typography variant="body2">Status: <span className="font-medium">{healthState.wsStatus?.ui.connected ? 'Connected' : 'Disconnected'}</span></Typography>
+                        <Typography variant="body2">Active Connections: <span className="font-medium">{healthState.wsStatus?.ui.connectionCount || 0}</span></Typography>
+                        <Typography variant="body2">Message Count: <span className="font-medium">{healthState.wsStatus?.ui.messageCount || 0}</span></Typography>
+                    </div>
+                </Box>
+            )}
         </Box>
     );
-};
+});
 
 export default Health; 

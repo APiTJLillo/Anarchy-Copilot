@@ -23,6 +23,7 @@ from database import AsyncSessionLocal
 from api.proxy.database_models import ProxyHistoryEntry
 from .flow_control import FlowControl
 from .state import proxy_state
+from proxy.websocket import ws_manager
 
 if TYPE_CHECKING:
     from .protocol import HttpsInterceptProtocol
@@ -359,9 +360,8 @@ class TunnelProtocol(H11Protocol):
         
         # Queue for WebSocket broadcast
         try:
-            from api.proxy.websocket import connection_manager
-            if connection_manager:
-                await connection_manager.broadcast_connection_update(self._active_connections[self._connection_id])
+            if ws_manager:
+                await ws_manager.broadcast_connection_update(self._active_connections[self._connection_id])
         except Exception as e:
             logger.error(f"Failed to broadcast event: {e}")
 
@@ -742,9 +742,8 @@ class TunnelProtocol(H11Protocol):
                 
                 # Broadcast update if WebSocket manager is available
                 try:
-                    from api.proxy.websocket import connection_manager
-                    if connection_manager:
-                        await connection_manager.broadcast_connection_update(
+                    if ws_manager:
+                        await ws_manager.broadcast_connection_update(
                             self._active_connections[self._connection_id]
                         )
                 except Exception as e:

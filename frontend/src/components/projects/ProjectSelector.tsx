@@ -30,13 +30,16 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
         }
     };
 
+    // Only set a value if we have projects and an active project
+    const selectValue = projects.length > 0 && activeProject?.id ? activeProject.id : '';
+
     return (
         <Box display="flex" alignItems="center" gap={1}>
             <FormControl size="small" sx={{ minWidth: 200 }}>
                 <InputLabel id="project-select-label">Active Project</InputLabel>
                 <Select
                     labelId="project-select-label"
-                    value={activeProject?.id ?? ''}
+                    value={selectValue}
                     label="Active Project"
                     onChange={handleChange}
                 >
@@ -45,7 +48,7 @@ export const ProjectSelector: React.FC<ProjectSelectorProps> = ({
                             <CircularProgress size={20} />
                         </MenuItem>
                     ) : projects.length === 0 ? (
-                        <MenuItem disabled>No projects available</MenuItem>
+                        <MenuItem disabled value="">No projects available</MenuItem>
                     ) : (
                         projects.map((project) => (
                             <MenuItem key={project.id} value={project.id}>

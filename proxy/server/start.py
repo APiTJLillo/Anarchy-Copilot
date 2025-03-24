@@ -6,6 +6,7 @@ from api.config import Settings
 from proxy.server.certificates import CertificateAuthority
 from proxy.config import ProxyConfig
 from proxy.server.proxy_server import ProxyServer
+from api.proxy import initialize_proxy
 
 # Configure logging
 logging.basicConfig(
@@ -20,6 +21,11 @@ async def main():
         # Load settings
         settings = Settings()
         
+        # Initialize proxy state first
+        logger.info("Initializing proxy state...")
+        await initialize_proxy()
+        logger.info("Proxy state initialized")
+        
         # Initialize CA
         ca = CertificateAuthority(
             ca_cert_path=Path(settings.ca_cert_path),
@@ -33,8 +39,8 @@ async def main():
             max_connections=settings.proxy_max_connections,
             max_keepalive_connections=settings.proxy_max_keepalive_connections,
             keepalive_timeout=settings.proxy_keepalive_timeout,
-            ca_cert_path=settings.ca_cert_path,
-            ca_key_path=settings.ca_key_path
+            ca_cert_path=Path(settings.ca_cert_path),
+            ca_key_path=Path(settings.ca_key_path)
         )
         
         proxy_server = ProxyServer(config=proxy_config, ca_instance=ca)
@@ -54,4 +60,4 @@ async def main():
         raise
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    asyncio.run(main())

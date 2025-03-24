@@ -4,11 +4,14 @@ from datetime import datetime
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from typing import (
     Any, Dict, List, Optional, Protocol,
-    TYPE_CHECKING, Union, runtime_checkable
+    TYPE_CHECKING, Union, runtime_checkable,
+    TypedDict
 )
 import uuid
+import logging
 
 from .types import (
     WSMessage, MessageType, MessageDirection,
@@ -26,6 +29,8 @@ if TYPE_CHECKING:
 MessageID = Union[str, uuid.UUID]
 MessagePattern = Union[str, List[str]]
 
+logger = logging.getLogger(__name__)
+
 @runtime_checkable
 class MessageContainer(Protocol):
     """Protocol for objects containing messages."""
@@ -42,9 +47,36 @@ class MessageContainer(Protocol):
         """Check if container has messages."""
         ...
 
-    def get_message_stats(self) -> Dict[str, int]:
+    def get_message_stats(self) -> 'ConversationStats':
         """Get statistics about messages."""
         ...
+
+class ConversationState(Enum):
+    """WebSocket conversation states."""
+    CONNECTING = "connecting"
+    CONNECTED = "connected"
+    CLOSING = "closing"
+    CLOSED = "closed"
+    ERROR = "error"
+
+# Base required stats
+class ConversationStatsRequired(TypedDict):
+    """Required conversation statistics."""
+    total_messages: int
+    text_messages: int
+    binary_messages: int
+    state: str
+    errors: int
+
+# Optional stats
+class ConversationStats(ConversationStatsRequired, total=False):
+    """Complete conversation statistics."""
+    outgoing_messages: int
+    incoming_messages: int
+    duration: Optional[float]
+    ping_messages: int
+    pong_messages: int
+    last_activity: Optional[datetime]
 
 @dataclass
 class WSConversation(MessageContainer):
@@ -56,6 +88,17 @@ class WSConversation(MessageContainer):
     messages: List[WSMessage] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
     closed_at: Optional[datetime] = None
+    state: ConversationState = field(default=ConversationState.CONNECTING)
+    error_count: int = field(default=0)
+    last_error: Optional[str] = field(default=None)
+
+    def set_state(self, state: ConversationState, error: Optional[str] = None) -> None:
+        """Update conversation state."""
+        self.state = state
+        if state == ConversationState.ERROR and error:
+            self.error_count += 1
+            self.last_error = error
+            logger.error(f"Conversation {self.id} error: {error}")
 
     def __len__(self) -> int:
         """Get number of messages in conversation."""
@@ -77,15 +120,26 @@ class WSConversation(MessageContainer):
         """Get the number of messages in the conversation."""
         return len(self)
 
-    def get_message_stats(self) -> Dict[str, int]:
+    def get_message_stats(self) -> ConversationStats:
         """Get statistics about messages in the conversation."""
-        return {
-            "total": len(self.messages),
-            "outgoing": sum(1 for m in self.messages if m.direction == MessageDirection.OUTGOING),
-            "incoming": sum(1 for m in self.messages if m.direction == MessageDirection.INCOMING),
-            "text": sum(1 for m in self.messages if m.type == MessageType.TEXT),
-            "binary": sum(1 for m in self.messages if m.type == MessageType.BINARY)
+        stats: ConversationStats = {
+            "total_messages": len(self.messages),
+            "outgoing_messages": sum(1 for m in self.messages if m.direction == MessageDirection.OUTGOING),
+            "incoming_messages": sum(1 for m in self.messages if m.direction == MessageDirection.INCOMING),
+            "text_messages": sum(1 for m in self.messages if m.type == MessageType.TEXT),
+            "binary_messages": sum(1 for m in self.messages if m.type == MessageType.BINARY),
+            "state": self.state.value,
+            "duration": self.duration,
+            "errors": self.error_count,
+            "ping_messages": sum(1 for m in self.messages if m.type == MessageType.PING),
+            "pong_messages": sum(1 for m in self.messages if m.type == MessageType.PONG)
         }
+
+        # Add last activity if we have messages
+        if self.messages:
+            stats["last_activity"] = self.messages[-1].timestamp
+
+        return stats
 
     def find_patterns(self, patterns: MessagePattern) -> List[WSMessage]:
         """Find messages matching specific patterns.
@@ -165,4 +219,35 @@ class WSConversation(MessageContainer):
             elif msg.type == MessageType.PONG:
                 await target.pong(msg.data)
             elif msg.type == MessageType.CLOSE:
-                await target.close()
+                self.set_state(ConversationState.CLOSING)
+                try:
+                    await target.close()
+                    self.set_state(ConversationState.CLOSED)
+                except Exception as e:
+                    self.set_state(ConversationState.ERROR, str(e))
+                break
+
+    @property
+    def duration(self) -> Optional[float]:
+        """Get conversation duration in seconds."""
+        if self.closed_at:
+            return (self.closed_at - self.created_at).total_seconds()
+        if self.state in (ConversationState.CONNECTED, ConversationState.CLOSING):
+            return (datetime.now() - self.created_at).total_seconds()
+        return None
+
+    @property
+    def is_active(self) -> bool:
+        """Check if conversation is active."""
+        return self.state in (ConversationState.CONNECTING, ConversationState.CONNECTED)
+
+    @property
+    def had_errors(self) -> bool:
+        """Check if conversation had any errors."""
+        return self.error_count > 0
+
+    def __str__(self) -> str:
+        """String representation of conversation."""
+        return (f"WSConversation(id={self.id}, url={self.url}, "
+                f"state={self.state.value}, messages={len(self)}, "
+                f"errors={self.error_count})")

@@ -7,8 +7,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import update, delete
 from sqlalchemy.orm import selectinload
+from fastapi.responses import JSONResponse
 
-from database.session import get_db
+from database.session import get_async_session
 from . import models
 from models.core import Project, User
 from . import router
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 @router.post("", response_model=ProjectResponse)
 async def create_project(
     data: CreateProject,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_async_session)
 ) -> ProjectResponse:
     """Create a new project."""
     # Verify owner exists
@@ -52,38 +53,62 @@ async def create_project(
 
 @router.get("", response_model=List[ProjectResponse])
 async def list_projects(
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_async_session)
 ) -> List[ProjectResponse]:
     """List all projects."""
-    result = await db.execute(
-        select(Project)
-        .order_by(Project.created_at.desc())
-    )
-    projects = result.scalars().all()
-    return list(projects)
+    try:
+        result = await db.execute(
+            select(Project)
+            .order_by(Project.created_at.desc())
+        )
+        projects = result.scalars().all()
+        return list(projects)
+    except Exception as e:
+        logger.error(f"Error fetching projects: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{project_id}", response_model=ProjectResponse)
 async def get_project(
     project_id: int,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_async_session)
 ) -> ProjectResponse:
     """Get a project by ID."""
-    result = await db.execute(
-        select(Project)
-        .options(selectinload(Project.collaborators))
-        .where(Project.id == project_id)
-    )
-    project = result.scalar_one_or_none()
-    if not project:
-        raise HTTPException(status_code=404, detail="Project not found")
-    
-    return project
+    try:
+        logger.debug(f"Fetching project with ID: {project_id}")
+        result = await db.execute(
+            select(Project)
+            .where(Project.id == project_id)
+        )
+        project = result.scalar_one_or_none()
+        if not project:
+            logger.debug(f"Project {project_id} not found")
+            raise HTTPException(status_code=404, detail="Project not found")
+        
+        logger.debug(f"Successfully fetched project {project_id}")
+        # Convert project to response model
+        response = ProjectResponse(
+            id=project.id,
+            name=project.name,
+            description=project.description,
+            owner_id=project.owner_id,
+            scope=project.scope or {},
+            is_archived=project.is_archived,
+            created_at=project.created_at,
+            updated_at=project.updated_at
+        )
+        logger.debug(f"Converted project {project_id} to response model: {response}")
+        return response
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching project {project_id}: {str(e)}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to fetch project: {str(e)}")
 
 @router.patch("/{project_id}", response_model=ProjectResponse)
 async def update_project(
     project_id: int,
     data: UpdateProject,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_async_session)
 ) -> ProjectResponse:
     """Update a project."""
     # Get project
@@ -108,7 +133,7 @@ async def update_project(
 @router.delete("/{project_id}")
 async def delete_project(
     project_id: int,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_async_session)
 ) -> Dict[str, str]:
     """Delete a project."""
     # Check project exists
@@ -131,7 +156,7 @@ async def delete_project(
 async def add_collaborator(
     project_id: int,
     data: ProjectCollaborator,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_async_session)
 ) -> ProjectCollaboratorResponse:
     """Add a collaborator to a project."""
     # Get project and user
@@ -164,7 +189,7 @@ async def add_collaborator(
 async def remove_collaborator(
     project_id: int,
     user_id: int,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_async_session)
 ) -> Dict[str, str]:
     """Remove a collaborator from a project."""
     # Get project
@@ -186,7 +211,7 @@ async def remove_collaborator(
 @router.get("/{project_id}/collaborators", response_model=List[ProjectCollaboratorResponse])
 async def list_collaborators(
     project_id: int,
-    db: AsyncSession = Depends(get_db)
+    db: AsyncSession = Depends(get_async_session)
 ) -> List[ProjectCollaboratorResponse]:
     """List all collaborators in a project."""
     result = await db.execute(

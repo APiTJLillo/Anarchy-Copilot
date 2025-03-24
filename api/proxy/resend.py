@@ -7,7 +7,7 @@ import httpx
 from pydantic import BaseModel
 
 from api.deps import get_db, get_current_user
-from models.proxy import ModifiedRequest, ProxyHistoryEntry, ProxySession
+from api.proxy.database_models import ModifiedRequest, ProxyHistoryEntry, ProxySession
 from models.user import User
 
 router = APIRouter()

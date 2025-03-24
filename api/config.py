@@ -110,3 +110,7 @@ class Settings(BaseSettings):
         """Initialize settings and log the configuration."""
         super().__init__(**data)
         logger.info(f"Initialized Settings: {self.model_dump()}")
+
+# Create and export settings instance
+settings = Settings()
+__all__ = ['settings']

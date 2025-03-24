@@ -6,11 +6,12 @@ from datetime import datetime
 import asyncio
 from async_timeout import timeout
 from sqlalchemy import text
+from urllib.parse import urlparse
 
 from database import AsyncSessionLocal
 from api.proxy.database_models import ProxyHistoryEntry
 from proxy.core.tls import get_tls_context, CertificateManager
-from ..tls.connection_manager import connection_mgr
+from ..types import ConnectionManagerProtocol
 from proxy.interceptor import InterceptedRequest, InterceptedResponse, ProxyInterceptor
 
 logger = logging.getLogger("proxy.core")
@@ -24,243 +25,335 @@ class ProxyResponse:
         self.body = body or b""
         
     def to_h11(self) -> Tuple[h11.Response, h11.Data, h11.EndOfMessage]:
-        """Convert to h11 events for sending."""
-        headers = [(k.encode(), v.encode()) for k, v in self.headers.items()]
-        if self.body and b"content-length" not in [k.lower() for k, _ in headers]:
-            headers.append((b"content-length", str(len(self.body)).encode()))
-            
-        response = h11.Response(status_code=self.status_code, headers=headers)
-        data = h11.Data(data=self.body) if self.body else None
-        endofmessage = h11.EndOfMessage()
-        
-        if data:
-            return response, data, endofmessage
-        return response, endofmessage
+        """Convert to h11 response objects."""
+        response = h11.Response(
+            status_code=self.status_code,
+            headers=[(k.encode(), v.encode()) for k, v in self.headers.items()]
+        )
+        data = h11.Data(data=self.body)
+        end = h11.EndOfMessage()
+        return response, data, end
 
 class HttpRequestHandler:
-    """Handles HTTP requests and responses during HTTPS interception."""
-
-    def __init__(self, connection_id: str):
+    """Handles HTTP requests and responses."""
+    
+    def __init__(self, connection_id: str, connection_manager: ConnectionManagerProtocol):
         self.connection_id = connection_id
-        self.client_conn = h11.Connection(h11.SERVER)  # For client->proxy
-        self.server_conn = h11.Connection(h11.CLIENT)  # For proxy->server
+        self.connection_manager = connection_manager
+        self.transport: Optional[asyncio.Transport] = None
+        self.remote_transport: Optional[asyncio.Transport] = None
+        self.remote_protocol: Optional[asyncio.Protocol] = None
+        self.request_buffer = bytearray()
+        self.response_buffer = bytearray()
+        self.current_request: Dict[str, Any] = {}
+        self._current_request: Optional[InterceptedRequest] = None
+        self._current_response: Optional[InterceptedResponse] = None
+        self._interceptor: Optional[ProxyInterceptor] = None
+        self._h11_client = h11.Connection(h11.SERVER)
+        self._h11_server = h11.Connection(h11.CLIENT)
+        self._request_complete = False
+        self._response_complete = False
         
-        # Request/response state
-        self._current_request: Optional[Dict[str, Any]] = None
-        self._current_response: Optional[Dict[str, Any]] = None
-        self._current_request_body = bytearray()
-        self._current_response_body = bytearray()
-        self._current_request_start_time: Optional[datetime] = None
-        self._history_entry_id: Optional[int] = None
-        self._interceptor = None  # Will be initialized in _ensure_interceptor
-        self._current_intercepted_request: Optional[InterceptedRequest] = None
-
+    def connection_made(self, transport: asyncio.Transport) -> None:
+        """Handle new client connection."""
+        self.transport = transport
+        self.connection_manager.create_connection(self.connection_id, transport)
+        logger.debug(f"New HTTP connection {self.connection_id}")
+        
+    def data_received(self, data: bytes) -> None:
+        """Handle received data from client."""
+        self.request_buffer.extend(data)
+        
+        # Try to parse complete request
+        if self._is_complete_request():
+            self._handle_request()
+            
+    def connection_lost(self, exc: Optional[Exception]) -> None:
+        """Handle client disconnection."""
+        if exc:
+            logger.error(f"Connection {self.connection_id} lost with error: {exc}")
+            self.connection_manager.update_connection(self.connection_id, "error", str(exc))
+            
+        # Close remote connection if still open
+        if self.remote_transport and not self.remote_transport.is_closing():
+            self.remote_transport.close()
+            
+        # Clean up connection tracking
+        self.connection_manager.close_connection(self.connection_id)
+        
+    def _is_complete_request(self) -> bool:
+        """Check if we have received a complete HTTP request."""
+        try:
+            # Look for end of headers
+            if b"\r\n\r\n" not in self.request_buffer:
+                return False
+                
+            # Parse headers
+            headers_end = self.request_buffer.index(b"\r\n\r\n") + 4
+            headers = self.request_buffer[:headers_end].decode('utf-8')
+            
+            # Parse request line
+            request_line = headers.split('\r\n')[0]
+            method, path, version = request_line.split(' ')
+            
+            # Store current request info
+            self.current_request = {
+                "method": method,
+                "path": path,
+                "version": version,
+                "headers": headers,
+                "headers_end": headers_end
+            }
+            
+            # Check for content-length
+            content_length = 0
+            for line in headers.split('\r\n')[1:]:
+                if line.lower().startswith('content-length:'):
+                    content_length = int(line.split(':')[1].strip())
+                    break
+                    
+            # Check if we have complete body
+            return len(self.request_buffer) >= headers_end + content_length
+            
+        except Exception as e:
+            logger.error(f"Error parsing request: {e}")
+            return False
+            
+    def _handle_request(self) -> None:
+        """Handle complete HTTP request."""
+        try:
+            # Parse URL
+            url = urlparse(self.current_request["path"])
+            host = url.netloc or url.path
+            
+            # Update connection info
+            self.connection_manager.update_connection(self.connection_id, "host", host)
+            self.connection_manager.update_connection(
+                self.connection_id,
+                "request",
+                {
+                    "method": self.current_request["method"],
+                    "path": self.current_request["path"],
+                    "version": self.current_request["version"]
+                }
+            )
+            
+            # Create remote connection if needed
+            if not self.remote_transport:
+                self._create_remote_connection(host)
+                
+            # Forward request
+            if self.remote_transport and not self.remote_transport.is_closing():
+                self.remote_transport.write(self.request_buffer)
+                self.connection_manager.record_event(
+                    self.connection_id,
+                    "request",
+                    "client-proxy",
+                    "success",
+                    len(self.request_buffer)
+                )
+                
+            # Clear buffer
+            self.request_buffer.clear()
+            self.current_request.clear()
+            
+        except Exception as e:
+            logger.error(f"Error handling request: {e}")
+            self.connection_manager.update_connection(self.connection_id, "error", str(e))
+            if self.transport:
+                self.transport.close()
+                
+    def _create_remote_connection(self, host: str) -> None:
+        """Create connection to remote server."""
+        # TODO: Implement remote connection establishment
+        # This will involve:
+        # 1. Resolving host
+        # 2. Creating transport
+        # 3. Setting up forwarding between client and remote
+        pass
+    
     async def _ensure_interceptor(self) -> None:
         """Ensure interceptor is initialized."""
-        if not self._interceptor:
-            logger.debug(f"[{self.connection_id}] Initializing interceptor")
-            # Get the first registered interceptor
-            interceptor_cls = next(iter(ProxyInterceptor._registry))
-            self._interceptor = interceptor_cls(self.connection_id)
-            # Test the interceptor
-            try:
-                await self._interceptor._ensure_db()
-                session_id = await self._interceptor._get_active_session()
-                if session_id:
-                    logger.info(f"[{self.connection_id}] Interceptor initialized with session {session_id}")
-                else:
-                    logger.warning(f"[{self.connection_id}] No active session found for interceptor")
-            except Exception as e:
-                logger.error(f"[{self.connection_id}] Failed to initialize interceptor: {e}")
-                self._interceptor = None
-                raise
-
+        if self._interceptor is None:
+            self._interceptor = ProxyInterceptor()
+            await self._interceptor.initialize()
+    
     async def handle_client_data(self, data: bytes) -> Optional[bytes]:
-        """Process data received from the client."""
+        """Handle data received from the client."""
         try:
-            self.client_conn.receive_data(data)
-            events = []
-            
+            self._h11_client.receive_data(data)
             while True:
-                event = self.client_conn.next_event()
+                event = self._h11_client.next_event()
                 if event is h11.NEED_DATA:
                     break
                     
                 if isinstance(event, h11.Request):
                     await self._start_request(event)
-                elif isinstance(event, h11.Data) and self._current_request:
-                    self._current_request_body.extend(event.data)
-                elif isinstance(event, h11.EndOfMessage) and self._current_request:
+                elif isinstance(event, h11.Data):
+                    self._request_buffer.extend(event.data)
+                elif isinstance(event, h11.EndOfMessage):
                     await self._complete_request()
-                elif event is h11.ConnectionClosed:
-                    return None
-
-            return self.server_conn.data_to_send()
                     
-        except Exception as e:
-            logger.error(f"[{self.connection_id}] Error handling client data: {e}")
             return None
-
-    async def handle_server_data(self, data: bytes) -> Optional[bytes]:
-        """Process data received from the server."""
-        try:
-            self.server_conn.receive_data(data)
             
+        except Exception as e:
+            logger.error(f"Error handling client data: {e}")
+            await self.connection_manager.record_event(
+                self.connection_id, 
+                "request", 
+                "client-proxy", 
+                "error",
+                len(data)
+            )
+            raise
+    
+    async def handle_server_data(self, data: bytes) -> Optional[bytes]:
+        """Handle data received from the server."""
+        try:
+            self._h11_server.receive_data(data)
             while True:
-                event = self.server_conn.next_event()
+                event = self._h11_server.next_event()
                 if event is h11.NEED_DATA:
                     break
                     
                 if isinstance(event, h11.Response):
                     await self._start_response(event)
-                elif isinstance(event, h11.Data) and self._current_response:
-                    self._current_response_body.extend(event.data)
-                elif isinstance(event, h11.EndOfMessage) and self._current_response:
+                elif isinstance(event, h11.Data):
+                    self._response_buffer.extend(event.data)
+                elif isinstance(event, h11.EndOfMessage):
                     await self._complete_response()
-                elif event is h11.ConnectionClosed:
-                    return None
-
-            return self.client_conn.data_to_send()
                     
-        except Exception as e:
-            logger.error(f"[{self.connection_id}] Error handling server data: {e}")
             return None
-
+            
+        except Exception as e:
+            logger.error(f"Error handling server data: {e}")
+            await self.connection_manager.record_event(
+                self.connection_id,
+                "response",
+                "server-proxy",
+                "error",
+                len(data)
+            )
+            raise
+    
     async def _start_request(self, event: h11.Request) -> None:
-        """Initialize a new request."""
-        self._current_request_start_time = datetime.utcnow()
-        self._current_request = {
-            "method": event.method.decode(),
-            "url": event.target.decode(),
-            "request_headers": dict(event.headers),
-            "request_body": bytearray(),
-            "is_modified": False,
-            "tls_info": get_tls_context(None)  # Will be updated later
-        }
-        self._current_request_body.clear()
-        
-        # Update connection metrics
-        connection_mgr.update_connection(
-            self.connection_id, 
-            "requests_processed",
-            connection_mgr._active_connections[self.connection_id]["requests_processed"] + 1
+        """Start processing a new request."""
+        self._current_request = InterceptedRequest(
+            method=event.method.decode(),
+            url=event.target.decode(),
+            headers={k.decode(): v.decode() for k, v in event.headers},
+            body=bytearray()
         )
-
+        self._request_buffer = bytearray()
+        self._request_complete = False
+        
+        await self.connection_manager.record_event(
+            self.connection_id,
+            "request",
+            "client-proxy",
+            "pending"
+        )
+    
     async def _complete_request(self) -> None:
-        """Process a complete HTTP request."""
+        """Complete processing of the current request."""
         if not self._current_request:
             return
             
-        # Store the request body
-        self._current_request["request_body"] = bytes(self._current_request_body)
+        self._current_request.body = bytes(self._request_buffer)
+        self._request_complete = True
         
-        # Ensure interceptor is initialized
-        try:
-            await self._ensure_interceptor()
-        except Exception as e:
-            logger.error(f"[{self.connection_id}] Failed to ensure interceptor: {e}")
-            return
-        
-        # Create intercepted request
-        self._current_intercepted_request = InterceptedRequest(
-            method=self._current_request["method"],
-            url=self._current_request["url"],
-            headers=self._current_request["request_headers"],
-            body=self._current_request["request_body"],
-            connection_id=self.connection_id
+        await self._ensure_interceptor()
+        if self._interceptor:
+            try:
+                await self._interceptor.handle_request(self._current_request)
+            except Exception as e:
+                logger.error(f"Error in request interceptor: {e}")
+                
+        await self.connection_manager.record_event(
+            self.connection_id,
+            "request",
+            "client-proxy",
+            "success",
+            len(self._request_buffer)
         )
         
-        # Let interceptor process request
-        try:
-            if self._interceptor:
-                await self._interceptor.intercept(self._current_intercepted_request)
-                logger.debug(f"[{self.connection_id}] Successfully intercepted request")
-            else:
-                logger.warning(f"[{self.connection_id}] No interceptor available for request")
-        except Exception as e:
-            logger.error(f"[{self.connection_id}] Failed to intercept request: {e}", exc_info=True)
-
+        # Store request in database
+        async with AsyncSessionLocal() as session:
+            entry = ProxyHistoryEntry(
+                connection_id=self.connection_id,
+                request_method=self._current_request.method,
+                request_url=self._current_request.url,
+                request_headers=self._current_request.headers,
+                request_body=self._current_request.body,
+                timestamp=datetime.utcnow()
+            )
+            session.add(entry)
+            await session.commit()
+    
     async def _start_response(self, event: h11.Response) -> None:
-        """Initialize a new response."""
-        self._current_response = {
-            "status_code": event.status_code,
-            "headers": dict(event.headers),
-            "body": bytearray(),
-            "is_modified": False
-        }
-        self._current_response_body.clear()
-
+        """Start processing a new response."""
+        self._current_response = InterceptedResponse(
+            status_code=event.status_code,
+            headers={k.decode(): v.decode() for k, v in event.headers},
+            body=bytearray()
+        )
+        self._response_buffer = bytearray()
+        self._response_complete = False
+        
+        await self.connection_manager.record_event(
+            self.connection_id,
+            "response",
+            "server-proxy",
+            "pending"
+        )
+    
     async def _complete_response(self) -> None:
-        """Process a complete HTTP response."""
-        if not self._current_response or not self._current_request:
+        """Complete processing of the current response."""
+        if not self._current_response:
             return
-
-        # Store the response body
-        self._current_response["body"] = bytes(self._current_response_body)
-        
-        # Create intercepted response
-        if self._current_intercepted_request:
-            intercepted_response = InterceptedResponse(
-                status_code=self._current_response["status_code"],
-                headers=self._current_response["headers"],
-                body=self._current_response["body"],
-                connection_id=self.connection_id
-            )
             
-            # Let interceptor process response
-            try:
-                if self._interceptor:
-                    await self._interceptor.intercept(intercepted_response, self._current_intercepted_request)
-                    logger.debug(f"[{self.connection_id}] Successfully intercepted response")
-                else:
-                    logger.warning(f"[{self.connection_id}] No interceptor available for response")
-            except Exception as e:
-                logger.error(f"[{self.connection_id}] Failed to intercept response: {e}", exc_info=True)
+        self._current_response.body = bytes(self._response_buffer)
+        self._response_complete = True
         
-        # Clear state
-        self._current_request = None
-        self._current_response = None
-        self._current_request_body.clear()
-        self._current_response_body.clear()
-        self._current_intercepted_request = None
-
-    def close(self) -> None:
-        """Clean up handler resources."""
-        self._current_request = None
-        self._current_response = None
-        self._current_request_body.clear()
-        self._current_response_body.clear()
-        self._current_intercepted_request = None
+        await self._ensure_interceptor()
         if self._interceptor:
-            asyncio.create_task(self._interceptor.close())
-
-    async def handle_request(self, request) -> None:
-        """Handle a Request object directly."""
-        try:
-            # Ensure method and target are strings
-            method = request.method.decode() if isinstance(request.method, bytes) else request.method
-            target = request.target.decode() if isinstance(request.target, bytes) else request.target
-            
-            # Create h11 Request event
-            h11_request = h11.Request(
-                method=method.encode(),
-                target=target.encode(),
-                headers=[(k.encode(), v.encode()) for k, v in request.headers.items()]
-            )
-            
-            # Process request
-            await self._start_request(h11_request)
-            
-            # Add request body if present
-            if request.body:
-                body_data = request.body if isinstance(request.body, bytes) else request.body.encode()
-                self._current_request_body.extend(body_data)
-            
-            # Complete request processing
-            await self._complete_request()
-            
-            logger.debug(f"[{self.connection_id}] Successfully handled request: {method} {target}")
-            
-        except Exception as e:
-            logger.error(f"[{self.connection_id}] Error handling request: {e}")
-            raise
+            try:
+                await self._interceptor.handle_response(self._current_response)
+            except Exception as e:
+                logger.error(f"Error in response interceptor: {e}")
+                
+        await self.connection_manager.record_event(
+            self.connection_id,
+            "response",
+            "server-proxy",
+            "success",
+            len(self._response_buffer)
+        )
+        
+        # Update database entry with response
+        if self._current_request:
+            async with AsyncSessionLocal() as session:
+                entry = await session.execute(
+                    text("SELECT * FROM proxy_history WHERE connection_id = :conn_id ORDER BY timestamp DESC LIMIT 1"),
+                    {"conn_id": self.connection_id}
+                )
+                entry = entry.first()
+                if entry:
+                    entry.response_status = self._current_response.status_code
+                    entry.response_headers = self._current_response.headers
+                    entry.response_body = self._current_response.body
+                    entry.completed_at = datetime.utcnow()
+                    await session.commit()
+    
+    def close(self) -> None:
+        """Close the handler and cleanup resources."""
+        if self._interceptor:
+            asyncio.create_task(self._interceptor.cleanup())
+        self._h11_client = h11.Connection(h11.SERVER)
+        self._h11_server = h11.Connection(h11.CLIENT)
+        self._current_request = None
+        self._current_response = None
+        self._request_buffer = bytearray()
+        self._response_buffer = bytearray()
+        self._request_complete = False
+        self._response_complete = False

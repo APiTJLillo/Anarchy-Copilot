@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.future import select
 from sqlalchemy import func, update
 from datetime import datetime
+from fastapi.responses import JSONResponse
 
 from database import get_async_session
 from . import models
@@ -20,12 +21,16 @@ async def list_users(
     db: AsyncSession = Depends(get_async_session)
 ) -> List[UserResponse]:
     """List all users."""
-    result = await db.execute(
-        select(User)
-        .order_by(User.username)
-    )
-    users = result.scalars().all()
-    return list(users)
+    try:
+        result = await db.execute(
+            select(User)
+            .order_by(User.username)
+        )
+        users = result.scalars().all()
+        return list(users)
+    except Exception as e:
+        logger.error(f"Error fetching users: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{user_id}", response_model=UserResponse)
 async def get_user(

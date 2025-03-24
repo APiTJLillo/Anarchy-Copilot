@@ -6,11 +6,12 @@ import json
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s [%(levelname)s] %(message)s',
+    level=logging.DEBUG,
+    format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S'
 )
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 __all__ = [
     "create_session",
@@ -29,7 +30,7 @@ __all__ = [
     "get_connections",
     "health_check"
 ]
-from typing import List, Optional
+from typing import List, Optional, Dict
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -43,7 +44,7 @@ from .database_models import (
     ProxyAnalysisResult,
     InterceptionRule
 )
-from models.proxy import ProxyHistoryEntry
+from api.proxy.database_models import ProxyHistoryEntry
 
 import os
 from functools import lru_cache
@@ -517,7 +518,34 @@ async def reorder_rules(
     await db.commit()
     return {"message": "Rules reordered successfully"}
 
-@router.get("/health")
-async def health_check() -> dict:
-    """Health check endpoint."""
-    return {"status": "ok"}
+@router.get("/health", tags=["health"], response_model=Dict[str, str])
+async def health_check(db: AsyncSession = Depends(get_db)) -> Dict[str, str]:
+    """Health check endpoint for proxy service."""
+    logger.debug("Health check endpoint called")
+    try:
+        # Get proxy state
+        from .state import proxy_state
+        
+        # Check if there's an active session
+        result = await db.execute(
+            select(ProxySession)
+            .where(ProxySession.is_active == True)
+            .order_by(ProxySession.start_time.desc())
+            .limit(1)
+        )
+        active_session = result.scalar_one_or_none()
+        
+        # Return minimal response for health checks
+        response = {
+            "status": "healthy",  # API is healthy if we can respond
+            "timestamp": datetime.utcnow().isoformat(),
+            "proxy_running": str(active_session is not None).lower()
+        }
+        logger.debug(f"Health check response: {response}")
+        return response
+    except Exception as e:
+        logger.error(f"Health check failed: {e}")
+        return {
+            "status": "unhealthy",
+            "error": str(e)
+        }

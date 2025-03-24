@@ -12,6 +12,8 @@ import psutil
 import gc
 import sys
 import resource
+import aiohttp
+from datetime import datetime
 
 from .proxy_server import ProxyServer
 from ..config import ProxyConfig
@@ -28,8 +30,12 @@ class SharedState:
         self.is_shutting_down = False
         self.last_gc_time: float = 0.0
         self.alert_subscribers: Set[str] = set()
+        self.initialization_lock = asyncio.Lock()
+        self.startup_complete = asyncio.Event()
 
 state = SharedState()
+
+app = FastAPI()
 
 def parse_path_env(env_var: str) -> Optional[Path]:
     """Parse path from environment variable and validate it exists.
@@ -65,90 +71,123 @@ def format_memory_size(size_bytes: int) -> str:
         size_bytes /= 1024
     return f"{size_bytes:.2f} TB"
 
+async def shutdown():
+    """Gracefully shut down the proxy server."""
+    if state.is_shutting_down:
+        return
+
+    state.is_shutting_down = True
+    logger.info("Initiating graceful shutdown...")
+
+    try:
+        if state.proxy_server:
+            await state.proxy_server.stop()
+            state.proxy_server = None
+            logger.info("Proxy server stopped")
+
+        # Cancel proxy task if running
+        if state.proxy_task and not state.proxy_task.done():
+            state.proxy_task.cancel()
+            try:
+                await state.proxy_task
+            except asyncio.CancelledError:
+                pass
+            state.proxy_task = None
+            logger.info("Proxy task cancelled")
+
+    except Exception as e:
+        logger.error(f"Error during shutdown: {e}")
+    finally:
+        state.is_shutting_down = False
+
 @app.on_event("startup")
 async def startup_event():
     """Initialize and start the proxy server."""
-    global state
-    try:
-        # Get certificate paths
-        ca_cert_path = parse_path_env('CA_CERT_PATH')
-        ca_key_path = parse_path_env('CA_KEY_PATH')
-        
-        # Check if both paths are available
-        if not ca_cert_path or not ca_key_path:
-            logger.warning("One or both CA certificate paths are not properly configured:")
-            if not ca_cert_path:
-                logger.warning("- CA_CERT_PATH is not set or invalid")
-            if not ca_key_path:
-                logger.warning("- CA_KEY_PATH is not set or invalid")
-            logger.warning("HTTPS interception will be disabled.")
-            ca_instance = None
-        else:
-            try:
-                # Initialize Certificate Authority but don't start it yet
-                ca_instance = CertificateAuthority(
-                    ca_cert_path=ca_cert_path,
-                    ca_key_path=ca_key_path
-                )
-                logger.info("Certificate Authority initialized successfully")
-                
-                # Start the CA
-                await ca_instance.start()
-                logger.info("Certificate Authority started successfully")
-            except Exception as e:
-                logger.error(f"Failed to initialize/start Certificate Authority: {e}")
-                ca_instance = None
-                logger.warning("HTTPS interception will be disabled")
-        
-        # Initialize proxy configuration
-        config = ProxyConfig(
-            host=os.getenv('ANARCHY_PROXY_HOST', '0.0.0.0'),
-            port=int(os.getenv('ANARCHY_PROXY_PORT', '8083')),
-            ca_cert_path=ca_cert_path,
-            ca_key_path=ca_key_path,
-            intercept_requests=os.getenv('ANARCHY_PROXY_INTERCEPT_REQUESTS', 'true').lower() == 'true',
-            intercept_responses=os.getenv('ANARCHY_PROXY_INTERCEPT_RESPONSES', 'true').lower() == 'true',
-            allowed_hosts=os.getenv('ALLOWED_HOSTS', '').split(',') if os.getenv('ALLOWED_HOSTS') else [],
-            excluded_hosts=os.getenv('EXCLUDED_HOSTS', '').split(',') if os.getenv('EXCLUDED_HOSTS') else [],
-            max_connections=int(os.getenv('ANARCHY_PROXY_MAX_CONNECTIONS', '100')),
-            max_keepalive_connections=int(os.getenv('ANARCHY_PROXY_MAX_KEEPALIVE_CONNECTIONS', '20')),
-            keepalive_timeout=int(os.getenv('ANARCHY_PROXY_KEEPALIVE_TIMEOUT', '30')),
-            memory_sample_interval=float(os.getenv('MEMORY_SAMPLE_INTERVAL', '10.0')),
-            memory_growth_threshold=int(os.getenv('MEMORY_GROWTH_THRESHOLD', str(10 * 1024 * 1024))),
-            memory_sample_retention=int(os.getenv('MEMORY_SAMPLE_RETENTION', '3600')),
-            memory_log_level=os.getenv('MEMORY_LOG_LEVEL', 'INFO'),
-            memory_alert_level=os.getenv('MEMORY_ALERT_LEVEL', 'WARNING'),
-            cleanup_timeout=float(os.getenv('CLEANUP_TIMEOUT', '5.0')),
-            force_cleanup_threshold=int(os.getenv('FORCE_CLEANUP_THRESHOLD', str(100 * 1024 * 1024))),
-            cleanup_retry_delay=float(os.getenv('CLEANUP_RETRY_DELAY', '0.5'))
-        )
-        
-        # Initialize proxy server with CA instance
-        logger.info("Starting proxy server...")
-        state.proxy_server = ProxyServer(config, ca_instance=ca_instance)
-        
-        # Start the proxy server and wait for it to be ready
+    async with state.initialization_lock:
         try:
-            await state.proxy_server.start()
-            logger.info("Proxy server started successfully")
-        except Exception as e:
-            logger.error(f"Failed to start proxy server: {e}")
-            raise
-        
-        # Set up signal handlers
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            signal.signal(sig, lambda s, f: asyncio.create_task(shutdown()))
-            
-    except Exception as e:
-        logger.error(f"Failed to start proxy server: {str(e)}")
-        raise
+            # Initialize proxy state first
+            from api.proxy.state import proxy_state
+            await proxy_state.initialize()
+            logger.info("Proxy state initialized")
 
-async def shutdown():
-    """Gracefully shut down the proxy server."""
-    logger.info("Shutting down proxy server...")
-    if hasattr(state, 'proxy_server') and state.proxy_server:
-        await state.proxy_server.stop()
-    logger.info("Shutdown complete")
+            # Get certificate paths
+            ca_cert_path = parse_path_env('CA_CERT_PATH')
+            ca_key_path = parse_path_env('CA_KEY_PATH')
+            
+            # Check if both paths are available
+            if not ca_cert_path or not ca_key_path:
+                logger.warning("One or both CA certificate paths are not properly configured:")
+                if not ca_cert_path:
+                    logger.warning("- CA_CERT_PATH is not set or invalid")
+                if not ca_key_path:
+                    logger.warning("- CA_KEY_PATH is not set or invalid")
+                logger.warning("HTTPS interception will be disabled.")
+                ca_instance = None
+            else:
+                try:
+                    # Initialize Certificate Authority but don't start it yet
+                    ca_instance = CertificateAuthority(
+                        ca_cert_path=ca_cert_path,
+                        ca_key_path=ca_key_path
+                    )
+                    logger.info("Certificate Authority initialized successfully")
+                    
+                    # Start the CA
+                    await ca_instance.start()
+                    logger.info("Certificate Authority started successfully")
+                except Exception as e:
+                    logger.error(f"Failed to initialize/start Certificate Authority: {e}")
+                    ca_instance = None
+                    logger.warning("HTTPS interception will be disabled")
+            
+            # Initialize proxy configuration
+            config = ProxyConfig(
+                host=os.getenv('ANARCHY_PROXY_HOST', '0.0.0.0'),
+                port=int(os.getenv('ANARCHY_PROXY_PORT', '8083')),
+                ca_cert_path=ca_cert_path,
+                ca_key_path=ca_key_path,
+                intercept_requests=os.getenv('ANARCHY_PROXY_INTERCEPT_REQUESTS', 'true').lower() == 'true',
+                intercept_responses=os.getenv('ANARCHY_PROXY_INTERCEPT_RESPONSES', 'true').lower() == 'true',
+                allowed_hosts=os.getenv('ALLOWED_HOSTS', '').split(',') if os.getenv('ALLOWED_HOSTS') else [],
+                excluded_hosts=os.getenv('EXCLUDED_HOSTS', '').split(',') if os.getenv('EXCLUDED_HOSTS') else [],
+                max_connections=int(os.getenv('ANARCHY_PROXY_MAX_CONNECTIONS', '100')),
+                max_keepalive_connections=int(os.getenv('ANARCHY_PROXY_MAX_KEEPALIVE_CONNECTIONS', '20')),
+                keepalive_timeout=int(os.getenv('ANARCHY_PROXY_KEEPALIVE_TIMEOUT', '30')),
+                memory_sample_interval=float(os.getenv('MEMORY_SAMPLE_INTERVAL', '10.0')),
+                memory_growth_threshold=int(os.getenv('MEMORY_GROWTH_THRESHOLD', str(10 * 1024 * 1024))),
+                memory_sample_retention=int(os.getenv('MEMORY_SAMPLE_RETENTION', '3600')),
+                memory_log_level=os.getenv('MEMORY_LOG_LEVEL', 'INFO'),
+                memory_alert_level=os.getenv('MEMORY_ALERT_LEVEL', 'WARNING'),
+                cleanup_timeout=float(os.getenv('CLEANUP_TIMEOUT', '5.0')),
+                force_cleanup_threshold=int(os.getenv('FORCE_CLEANUP_THRESHOLD', str(100 * 1024 * 1024))),
+                cleanup_retry_delay=float(os.getenv('CLEANUP_RETRY_DELAY', '0.5'))
+            )
+            
+            # Initialize proxy server with CA instance
+            logger.info("Starting proxy server...")
+            state.proxy_server = ProxyServer(config, ca_instance=ca_instance)
+            
+            # Register proxy server with proxy state
+            proxy_state.set_proxy_server(state.proxy_server)
+            
+            # Start the proxy server and wait for it to be ready
+            try:
+                await state.proxy_server.start()
+                logger.info("Proxy server started successfully")
+            except Exception as e:
+                logger.error(f"Failed to start proxy server: {e}")
+                raise
+            
+            # Set up signal handlers
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                signal.signal(sig, lambda s, f: asyncio.create_task(shutdown()))
+
+            # Signal successful startup
+            state.startup_complete.set()
+            
+        except Exception as e:
+            logger.error(f"Failed to start proxy server: {str(e)}")
+            raise
 
 @app.on_event("shutdown")
 async def shutdown_event():

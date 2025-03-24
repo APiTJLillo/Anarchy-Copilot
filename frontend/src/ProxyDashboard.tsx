@@ -29,8 +29,7 @@ import AnalysisResults from './components/proxy/AnalysisResults';
 import InterceptionRuleManager from './components/proxy/InterceptionRuleManager';
 import { Version } from './components/proxy/Version';
 import { useProxyApi } from './api/proxyApi';
-import { useWebSocket } from './hooks/useWebSocket';
-import { WS_ENDPOINT } from './config';
+import { useWebSocket } from './contexts/WebSocketContext';
 import { reconstructUrl } from './utils/urlUtils';
 import type { ProxySession, ProxySettings, VersionInfo } from './api/proxyApi';
 import type { AnalysisResult } from './api/proxyApi';
@@ -94,9 +93,13 @@ const ProxyDashboardContent: React.FC = () => {
     projects,
     loadingUsers,
     loadingProjects,
-    error: userError
+    error: userError,
+    wsConnected,
+    setWsConnected,
+    isInitialized: userInitialized
   } = useUser();
   const proxyApi = useProxyApi();
+  const { isConnected, error: wsError, send, subscribe } = useWebSocket();
 
   const selectedProject = projects.length ? projects[0].id : '';
   const [selectedRequest, setSelectedRequest] = useState<any>(null);
@@ -109,6 +112,7 @@ const ProxyDashboardContent: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [initialized, setInitialized] = useState(false);
+  const [dataLoaded, setDataLoaded] = useState(false);
   const [tabValue, setTabValue] = useState(0);
   const [localProxyEnabled, setLocalProxyEnabled] = useState(false);
   const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
@@ -225,21 +229,19 @@ const ProxyDashboardContent: React.FC = () => {
     };
 
   // Track WebSocket and data loading states
-  const [wsConnected, setWsConnected] = useState(false);
-  const [dataLoaded, setDataLoaded] = useState(false);
-
-  // Update initialized state when both WebSocket is connected and data is loaded
   useEffect(() => {
-    if (wsConnected && dataLoaded) {
+    if (isConnected && dataLoaded && userInitialized) {
       setInitialized(true);
       setLoading(false);
     }
-  }, [wsConnected, dataLoaded]);
+  }, [isConnected, dataLoaded, userInitialized]);
 
-  // WebSocket for live updates
-  useWebSocket<WSMessage>(WS_ENDPOINT, {
-    onMessage: (message) => {
+  // Subscribe to WebSocket messages
+  useEffect(() => {
+    const unsubscribe = subscribe('proxy', (message: WSMessage) => {
+      console.debug('[ProxyDashboard] Received WebSocket message:', message);
       if (message.type === 'initial_data') {
+        console.debug('[ProxyDashboard] Processing initial data:', message.data);
         setStatus(message.data.status);
         setHistory(message.data.history);
         setAnalysisResults(message.data.analysis);
@@ -256,7 +258,6 @@ const ProxyDashboardContent: React.FC = () => {
           case 'proxy_history':
             setHistory(prevHistory => {
               const newEntry = message.data;
-              // Add new entry to the beginning of the history array
               return [newEntry, ...prevHistory];
             });
             break;
@@ -268,42 +269,45 @@ const ProxyDashboardContent: React.FC = () => {
             break;
         }
       }
-    },
-    onOpen: () => {
-      setWsConnected(true);
-      setError(null);
-      console.log('WebSocket connected');
-    },
-    onClose: () => {
-      setWsConnected(false);
-      console.log('WebSocket disconnected');
-    },
-    onError: (err) => {
-      console.error('WebSocket error:', err);
-      setWsConnected(false);
-      setError('Failed to connect to proxy server');
-    },
-    reconnectAttempts: 5,
-    reconnectInterval: 3000,
-    keepAlive: true
-  });
+    });
 
-  if (!wsConnected || loadingUsers || loadingProjects) {
+    // Request initial data when WebSocket connects
+    if (isConnected) {
+      console.debug('[ProxyDashboard] Requesting initial data');
+      send({
+        type: 'get_initial_data',
+        channel: 'proxy'  // Add channel to the message
+      });
+    }
+
+    return () => unsubscribe();
+  }, [subscribe, initialized, isConnected, send]);
+
+  // Show loading state while initializing
+  if (!initialized || loadingUsers || loadingProjects) {
     return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
+      <Box sx={{ display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', height: '100vh' }}>
         <CircularProgress />
+        <Typography sx={{ mt: 2 }} color="textSecondary">
+          {!userInitialized ? 'Loading user data...' : !isConnected ? 'Connecting to server...' : 'Loading proxy data...'}
+        </Typography>
+      </Box>
+    );
+  }
+
+  // Show error state
+  if (error || userError || wsError) {
+    return (
+      <Box sx={{ p: 3 }}>
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {error || userError || wsError?.message}
+        </Alert>
       </Box>
     );
   }
 
   return (
     <Box sx={{ p: 3 }}>
-      {(error || userError) && (
-        <Alert severity="error" sx={{ mb: 2 }}>
-          {error || userError}
-        </Alert>
-      )}
-
       <Grid container spacing={3}>
         {/* Status and Controls */}
         <Grid item xs={12}>
@@ -374,25 +378,11 @@ const ProxyDashboardContent: React.FC = () => {
 
               {/* Existing Proxy History and InterceptorView */}
               <Grid container spacing={3}>
-                <Grid item xs={12} md={6}>
-                  <ProxyProvider>
-                    <Paper sx={{ p: 2 }}>
-                      <Typography variant="body1" align="center">
-                        Waiting for requests to intercept...
-                        The interceptor will open automatically when requests are captured.
-                      </Typography>
-                    </Paper>
-                  </ProxyProvider>
-                </Grid>
-
-                <Grid item xs={12} md={6}>
+                <Grid item xs={12}>
                   <Paper sx={{ p: 2 }}>
-                    <Typography variant="h6" align="center">
-                      Proxy History
-                    </Typography>
                     {history.length === 0 ? (
                       <Typography variant="body1" align="center">
-                        No history available.
+                        No proxy history available
                       </Typography>
                     ) : (
                       <TableContainer>

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo, useCallback } from 'react';
 import { Typography, Box, Chip, Tooltip, CircularProgress } from '@mui/material';
 import InfoIcon from '@mui/icons-material/Info';
 import { useWebSocket } from '../../hooks/useWebSocket';
@@ -11,15 +11,22 @@ type WSMessage =
 
 export const Version: React.FC = () => {
     const [version, setVersion] = useState<VersionInfo | null>(null);
-    const { isConnected, error } = useWebSocket<WSMessage>(WS_ENDPOINT, {
-        onMessage: (message) => {
-            if (message.type === 'version_info') {
-                setVersion(message.data);
-            } else if (message.type === 'initial_data') {
-                setVersion(message.data.version);
-            }
+    
+    // Memoize the message handler to prevent it from being recreated on every render
+    const handleMessage = useCallback((message: WSMessage) => {
+        if (message.type === 'version_info') {
+            setVersion(message.data);
+        } else if (message.type === 'initial_data') {
+            setVersion(message.data.version);
         }
-    });
+    }, []);
+    
+    // Memoize the options object to prevent it from being recreated on every render
+    const wsOptions = useMemo(() => ({
+        onMessage: handleMessage
+    }), [handleMessage]);
+    
+    const { isConnected, error } = useWebSocket<WSMessage>(WS_ENDPOINT, wsOptions);
 
     if (error) return null;
     if (!isConnected || !version) {

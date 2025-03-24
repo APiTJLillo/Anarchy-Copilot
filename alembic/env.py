@@ -16,11 +16,9 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # Import all models to ensure they are registered with Base.metadata
-from models import Base
-import models.base
-import models.recon
-import models.vulnerability
-import database
+from database.base import Base
+import models.core
+import api.proxy.database_models
 
 # add your model's MetaData object here
 # for 'autogenerate' support

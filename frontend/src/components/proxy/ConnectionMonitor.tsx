@@ -19,9 +19,18 @@ import {
     Language as WebIcon,
     ArrowRightAlt,
 } from '@mui/icons-material';
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { useWebSocket } from '../../hooks/useWebSocket';
 import { WS_ENDPOINT } from '../../config';
+
+// Utility function moved outside component for stability
+const sortByLatestActivity = (connections: Connection[]) => {
+    return [...connections].sort((a, b) => {
+        const aTime = a.events[a.events.length - 1]?.timestamp || 0;
+        const bTime = b.events[b.events.length - 1]?.timestamp || 0;
+        return bTime - aTime;
+    });
+};
 
 export interface ConnectionEvent {
     type: 'request' | 'response';
@@ -124,43 +133,35 @@ const ConnectionCard: React.FC<{ connection: Connection }> = ({ connection }) =>
 
 const ConnectionMonitor: React.FC = () => {
     const [connections, setConnections] = useState<Connection[]>([]);
-    // Sort connections by most recent activity
-    const sortByLatestActivity = useCallback((connections: Connection[]) => {
-        return [...connections].sort((a, b) => {
-            const aTime = a.events[a.events.length - 1]?.timestamp || 0;
-            const bTime = b.events[b.events.length - 1]?.timestamp || 0;
-            return bTime - aTime;
-        });
-    }, []);
 
     // WebSocket message types
-    type ConnectionMonitorMessage = 
+    type ConnectionMonitorMessage =
         | { type: 'connection_update'; data: Connection }
         | { type: 'connection_closed'; data: { id: string } };
 
-    // WebSocket connection with type-safe messages
-    const { isConnected, error } = useWebSocket<ConnectionMonitorMessage>(WS_ENDPOINT, {
-        onMessage: (message) => {
-            switch (message.type) {
-                case 'connection_update': {
-                    setConnections(prev => {
-                        const connectionIndex = prev.findIndex(c => c.id === message.data.id);
-                        if (connectionIndex === -1) {
-                            // Add new connection and sort
-                            return sortByLatestActivity([...prev, message.data]);
-                        }
-                        // Update existing connection and sort
-                        const updated = [...prev];
-                        updated[connectionIndex] = message.data;
-                        return sortByLatestActivity(updated);
-                    });
-                    break;
-                }
-                case 'connection_closed':
-                    setConnections(prev => prev.filter(c => c.id !== message.data.id));
-                    break;
+    // Memoized message handler
+    const handleMessage = useCallback((message: ConnectionMonitorMessage) => {
+        switch (message.type) {
+            case 'connection_update': {
+                setConnections(prev => {
+                    // Filter out existing connection and add updated version
+                    const updated = prev.filter(c => c.id !== message.data.id);
+                    return sortByLatestActivity([...updated, message.data]);
+                });
+                break;
             }
+            case 'connection_closed':
+                setConnections(prev => prev.filter(c => c.id !== message.data.id));
+                break;
         }
+    }, []); // No dependencies needed since sortByLatestActivity is stable
+
+    // WebSocket connection with type-safe messages and stable configuration
+    const { isConnected, error } = useWebSocket<ConnectionMonitorMessage>(WS_ENDPOINT, {
+        onMessage: handleMessage,
+        reconnectAttempts: 5,
+        reconnectInterval: 2000,
+        debug: true
     });
 
     if (!isConnected) {

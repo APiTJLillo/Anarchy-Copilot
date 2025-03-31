@@ -129,5 +129,12 @@
                 "thresholds"
             ]
         }
-    }
+    },
+    "unit_pass_rate": 95,
+    "stress_pass_rate": 90,
+    "load_pass_rate": 90,
+    "unit_duration": 300,
+    "stress_duration": 600,
+    "load_duration": 900,
+    "coverage": 80
 }

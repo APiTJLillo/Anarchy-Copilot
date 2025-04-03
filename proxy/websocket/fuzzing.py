@@ -18,6 +18,7 @@ from pathlib import Path
 
 from .types import WSMessage, MessageType, MessageDirection
 from .conversation import WSConversation, ConversationState
+from .parameter_detector import ParameterDetector, DetectedParameter
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,7 @@ class FuzzingType(Enum):
     PROTOCOL = auto()
     JSON_STRUCTURE = auto()
     CUSTOM = auto()
+    AUTO_DETECT = auto()  # New fuzzing type for auto-detected parameters
     
     def __str__(self) -> str:
         return self.name.lower()
@@ -310,6 +312,7 @@ class WSFuzzer:
     is_enabled: bool = False
     config: Dict[str, Any] = field(default_factory=dict)
     list_manager: FuzzingListManager = field(default_factory=lambda: FuzzingListManager())
+    parameter_detector: ParameterDetector = field(default_factory=lambda: ParameterDetector())
     _sql_patterns: List[str] = field(default_factory=lambda: [
         "' OR '1'='1",
         "; DROP TABLE",
@@ -329,6 +332,15 @@ class WSFuzzer:
         try:
             self.config.update(config or {})
             self.is_enabled = config.get('enabled', False)
+            
+            # Configure parameter detector if settings provided
+            if 'parameter_detector' in config:
+                detector_config = config['parameter_detector']
+                if 'confidence_threshold' in detector_config:
+                    self.parameter_detector = ParameterDetector(
+                        confidence_threshold=float(detector_config['confidence_threshold'])
+                    )
+                    
             logger.info(f"Fuzzer configured - enabled: {self.is_enabled}")
         except Exception as e:
             logger.error(f"Error configuring fuzzer: {e}")
@@ -560,6 +572,112 @@ class WSFuzzer:
                 
         return fuzzed_messages
 
+    async def detect_and_fuzz_parameters(self, conversation: Union[Fuzzable, WSConversation], 
+                                        list_id: Optional[str] = None) -> List[WSMessage]:
+        """Auto-detect parameters and fuzz them.
+        
+        Args:
+            conversation: WebSocket conversation to analyze and fuzz
+            list_id: Optional ID of fuzzing list to use for payloads
+            
+        Returns:
+            List of fuzzed messages targeting detected parameters
+        """
+        if not self.is_enabled:
+            return []
+            
+        conv = conversation if isinstance(conversation, Fuzzable) else Fuzzable.from_conversation(conversation)
+        if not conv.validate():
+            logger.error("Failed to validate conversation for auto-detect parameter fuzzing")
+            return []
+            
+        fuzzed_messages: List[WSMessage] = []
+        
+        # Get payloads to use
+        payloads = []
+        if list_id:
+            fuzzing_list = self.list_manager.get_list(list_id)
+            if fuzzing_list:
+                payloads = fuzzing_list.payloads
+            else:
+                logger.warning(f"Fuzzing list not found: {list_id}, using default payloads")
+                payloads = self._get_default_payloads()
+        else:
+            payloads = self._get_default_payloads()
+            
+        # Process each message
+        for msg in conv.messages:
+            if msg.type != MessageType.TEXT:
+                continue
+                
+            # Detect parameters
+            detected_params = self.parameter_detector.detect_parameters(msg)
+            if not detected_params:
+                logger.info(f"No parameters detected in message {msg.id}")
+                continue
+                
+            logger.info(f"Detected {len(detected_params)} parameters in message {msg.id}")
+            
+            # Fuzz each parameter with each payload
+            for param in detected_params:
+                for payload in payloads:
+                    try:
+                        # Create fuzzed message with the parameter replaced
+                        fuzzed_data = self._replace_parameter_with_payload(
+                            str(msg.data), param, payload
+                        )
+                        
+                        if fuzzed_data:
+                            fuzzed_msg = WSMessage(
+                                id=uuid.uuid4(),
+                                type=msg.type,
+                                data=fuzzed_data,
+                                direction=msg.direction,
+                                timestamp=datetime.now(),
+                                metadata={
+                                    "fuzzed": True,
+                                    "fuzz_type": "auto_detect",
+                                    "param_name": param.name,
+                                    "param_type": str(param.param_type),
+                                    "param_path": param.path,
+                                    "original_value": param.value,
+                                    "payload": payload,
+                                    **msg.metadata
+                                }
+                            )
+                            fuzzed_messages.append(fuzzed_msg)
+                    except Exception as e:
+                        logger.error(f"Error fuzzing parameter {param.name}: {e}")
+                        continue
+        
+        logger.info(f"Generated {len(fuzzed_messages)} fuzzed messages using auto-detected parameters")
+        return fuzzed_messages
+    
+    def get_detected_parameters(self, conversation: Union[Fuzzable, WSConversation]) -> List[Dict[str, Any]]:
+        """Get all detected parameters from a conversation.
+        
+        Args:
+            conversation: WebSocket conversation to analyze
+            
+        Returns:
+            List of detected parameters as dictionaries
+        """
+        conv = conversation if isinstance(conversation, Fuzzable) else Fuzzable.from_conversation(conversation)
+        if not conv.validate():
+            logger.error("Failed to validate conversation for parameter detection")
+            return []
+            
+        all_params = []
+        for msg in conv.messages:
+            if msg.type != MessageType.TEXT:
+                continue
+                
+            # Detect parameters
+            detected_params = self.parameter_detector.detect_parameters(msg)
+            all_params.extend([p.to_dict() for p in detected_params])
+            
+        return all_params
+
     def _fuzz_data(self, data: Union[str, bytes]) -> Union[str, bytes]:
         """Apply fuzzing mutations to message data.
         
@@ -644,3 +762,197 @@ class WSFuzzer:
         ]
         mutation = random.choice(mutations)
         return mutation(data)
+        
+    def _get_default_payloads(self) -> List[str]:
+        """Get default payloads for auto-detected parameters."""
+        return [
+            # SQL Injection
+            "' OR '1'='1",
+            "1; DROP TABLE users",
+            "1 UNION SELECT username, password FROM users",
+            
+            # XSS
+            "<script>alert(1)</script>",
+            "<img src=x onerror=alert(1)>",
+            
+            # Command Injection
+            "$(cat /etc/passwd)",
+            "; ls -la",
+            "| cat /etc/shadow",
+            
+            # Path Traversal
+            "../../../etc/passwd",
+            "..\\..\\..\\windows\\system32\\config\\sam",
+            
+            # Special Characters
+            "!@#$%^&*()_+{}[]|\\:;\"'<>,.?/",
+            
+            # Numeric
+            "0",
+            "-1",
+            "99999999",
+            "3.14159",
+            
+            # Boolean
+            "true",
+            "false",
+            
+            # Empty/Null
+            "",
+            "null",
+            
+            # Long strings
+            "A" * 1000,
+            
+            # Format strings
+            "%s%s%s%s%s",
+            "%x%x%x%x",
+            "%n%n%n%n",
+            
+            # Unicode
+            "你好",
+            "Привет",
+            "😀😈👾"
+        ]
+        
+    def _replace_parameter_with_payload(self, data: str, param: DetectedParameter, payload: str) -> Optional[str]:
+        """Replace a parameter with a payload in the message data.
+        
+        Args:
+            data: Original message data
+            param: Parameter to replace
+            payload: Payload to inject
+            
+        Returns:
+            Modified data with parameter replaced by payload
+        """
+        try:
+            # Handle different parameter types
+            if param.param_type.name == "JSON_KEY" or param.param_type.name == "JSON_VALUE":
+                return self._replace_in_json(data, param, payload)
+            elif param.param_type.name == "URL_QUERY":
+                return self._replace_in_url(data, param, payload)
+            elif param.param_type.name == "FORM_DATA":
+                return self._replace_in_form(data, param, payload)
+            else:
+                # For custom parameters, try simple string replacement
+                original_value = str(param.value)
+                if original_value in data:
+                    return data.replace(original_value, payload)
+                return None
+        except Exception as e:
+            logger.error(f"Error replacing parameter {param.name} with payload: {e}")
+            return None
+            
+    def _replace_in_json(self, data: str, param: DetectedParameter, payload: str) -> Optional[str]:
+        """Replace a parameter in JSON data.
+        
+        Args:
+            data: JSON string
+            param: Parameter to replace
+            payload: Payload to inject
+            
+        Returns:
+            Modified JSON string
+        """
+        try:
+            json_data = json.loads(data)
+            
+            # Parse the JSON path
+            path_parts = param.path.split('.')
+            if path_parts[0] == '$':
+                path_parts = path_parts[1:]
+                
+            # Navigate to the target location
+            current = json_data
+            parent = None
+            last_key = None
+            
+            for i, part in enumerate(path_parts):
+                # Handle array indices
+                if '[' in part and ']' in part:
+                    key, idx_str = part.split('[', 1)
+                    idx = int(idx_str.rstrip(']'))
+                    
+                    if key:
+                        if i == len(path_parts) - 1:
+                            parent = current
+                            last_key = key
+                        current = current[key]
+                        current[idx] = payload if i == len(path_parts) - 1 else current[idx]
+                    else:
+                        if i == len(path_parts) - 1:
+                            parent = current
+                            last_key = idx
+                        current[idx] = payload if i == len(path_parts) - 1 else current[idx]
+                else:
+                    if i == len(path_parts) - 1:
+                        parent = current
+                        last_key = part
+                    else:
+                        current = current[part]
+            
+            # Replace the value
+            if parent is not None and last_key is not None:
+                if isinstance(last_key, int):
+                    parent[last_key] = payload
+                else:
+                    parent[last_key] = payload
+                    
+            return json.dumps(json_data)
+        except Exception as e:
+            logger.error(f"Error replacing in JSON: {e}")
+            return None
+            
+    def _replace_in_url(self, data: str, param: DetectedParameter, payload: str) -> str:
+        """Replace a parameter in URL query string.
+        
+        Args:
+            data: URL or query string
+            param: Parameter to replace
+            payload: Payload to inject
+            
+        Returns:
+            Modified URL or query string
+        """
+        param_name = param.name
+        
+        # Handle URL query parameters
+        if '?' in data:
+            base_url, query = data.split('?', 1)
+            params = urllib.parse.parse_qs(query)
+            
+            if param_name in params:
+                params[param_name] = [payload]
+                new_query = urllib.parse.urlencode(params, doseq=True)
+                return f"{base_url}?{new_query}"
+        
+        # Simple replacement for other cases
+        pattern = f"{param_name}={param.value}"
+        replacement = f"{param_name}={payload}"
+        return data.replace(pattern, replacement)
+            
+    def _replace_in_form(self, data: str, param: DetectedParameter, payload: str) -> str:
+        """Replace a parameter in form data.
+        
+        Args:
+            data: Form encoded data
+            param: Parameter to replace
+            payload: Payload to inject
+            
+        Returns:
+            Modified form data
+        """
+        param_name = param.name
+        
+        # Parse form data
+        params = urllib.parse.parse_qs(data)
+        
+        if param_name in params:
+            params[param_name] = [payload]
+            return urllib.parse.urlencode(params, doseq=True)
+        
+        # Simple replacement for other cases
+        pattern = f"{param_name}={param.value}"
+        replacement = f"{param_name}={payload}"
+        return data.replace(pattern, replacement)

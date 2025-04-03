@@ -216,7 +216,7 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
      - In Progress:
        - ✓ Add ability to edit a request and resend it
        - ✓ Add a fuzzer with the ability to load lists into the fuzzer and store them in the database as separate lists for separate circumstances
-       - Auto-detect url parameters and other things that could be used in the fuzzer.
+       - ✓ Auto-detect url parameters and other things that could be used in the fuzzer.
        - Add packet capture and manipulation to proxy capabilities
        - Add lag simulation to proxy
        - Add AI packet analysis

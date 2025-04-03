@@ -1,4 +1,4 @@
-"""WebSocket fuzzing implementation."""
+"""WebSocket fuzzing implementation with list loading capabilities."""
 from dataclasses import dataclass, field
 from typing import (
     Dict, Any, List, Optional, Awaitable,
@@ -11,7 +11,10 @@ import json
 import logging
 import random
 import uuid
+import os
+import sqlite3
 from datetime import datetime
+from pathlib import Path
 
 from .types import WSMessage, MessageType, MessageDirection
 from .conversation import WSConversation, ConversationState
@@ -58,9 +61,247 @@ class FuzzingType(Enum):
     XSS = auto()
     PROTOCOL = auto()
     JSON_STRUCTURE = auto()
+    CUSTOM = auto()
     
     def __str__(self) -> str:
         return self.name.lower()
+
+@dataclass
+class FuzzingList:
+    """Represents a list of fuzzing payloads."""
+    id: str
+    name: str
+    description: str
+    category: str
+    payloads: List[str]
+    created_at: datetime = field(default_factory=datetime.now)
+    updated_at: datetime = field(default_factory=datetime.now)
+    
+    @classmethod
+    def from_file(cls, file_path: str, name: Optional[str] = None, category: Optional[str] = None) -> 'FuzzingList':
+        """Create a fuzzing list from a file."""
+        path = Path(file_path)
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
+            
+        with open(file_path, 'r', encoding='utf-8') as f:
+            payloads = [line.strip() for line in f if line.strip()]
+            
+        return cls(
+            id=str(uuid.uuid4()),
+            name=name or path.stem,
+            description=f"Imported from {path.name}",
+            category=category or "imported",
+            payloads=payloads
+        )
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary."""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "category": self.category,
+            "payload_count": len(self.payloads),
+            "created_at": self.created_at.isoformat(),
+            "updated_at": self.updated_at.isoformat()
+        }
+
+class FuzzingListManager:
+    """Manages fuzzing lists storage and retrieval."""
+    
+    def __init__(self, db_path: str = "fuzzing_lists.db"):
+        """Initialize the fuzzing list manager."""
+        self.db_path = db_path
+        self._initialize_db()
+        
+    def _initialize_db(self) -> None:
+        """Initialize the database."""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+        
+        # Create tables if they don't exist
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS fuzzing_lists (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            category TEXT,
+            created_at TEXT,
+            updated_at TEXT
+        )
+        ''')
+        
+        cursor.execute('''
+        CREATE TABLE IF NOT EXISTS fuzzing_payloads (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            list_id TEXT,
+            payload TEXT,
+            FOREIGN KEY (list_id) REFERENCES fuzzing_lists (id) ON DELETE CASCADE
+        )
+        ''')
+        
+        conn.commit()
+        conn.close()
+        
+    def save_list(self, fuzzing_list: FuzzingList) -> bool:
+        """Save a fuzzing list to the database."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Update the list's updated_at timestamp
+            fuzzing_list.updated_at = datetime.now()
+            
+            # Check if list exists
+            cursor.execute("SELECT id FROM fuzzing_lists WHERE id = ?", (fuzzing_list.id,))
+            exists = cursor.fetchone() is not None
+            
+            if exists:
+                # Update existing list
+                cursor.execute('''
+                UPDATE fuzzing_lists 
+                SET name = ?, description = ?, category = ?, updated_at = ?
+                WHERE id = ?
+                ''', (
+                    fuzzing_list.name,
+                    fuzzing_list.description,
+                    fuzzing_list.category,
+                    fuzzing_list.updated_at.isoformat(),
+                    fuzzing_list.id
+                ))
+                
+                # Delete existing payloads
+                cursor.execute("DELETE FROM fuzzing_payloads WHERE list_id = ?", (fuzzing_list.id,))
+            else:
+                # Insert new list
+                cursor.execute('''
+                INSERT INTO fuzzing_lists (id, name, description, category, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ''', (
+                    fuzzing_list.id,
+                    fuzzing_list.name,
+                    fuzzing_list.description,
+                    fuzzing_list.category,
+                    fuzzing_list.created_at.isoformat(),
+                    fuzzing_list.updated_at.isoformat()
+                ))
+            
+            # Insert payloads
+            for payload in fuzzing_list.payloads:
+                cursor.execute('''
+                INSERT INTO fuzzing_payloads (list_id, payload)
+                VALUES (?, ?)
+                ''', (fuzzing_list.id, payload))
+            
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"Error saving fuzzing list: {e}")
+            return False
+    
+    def get_list(self, list_id: str) -> Optional[FuzzingList]:
+        """Get a fuzzing list by ID."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            # Get list metadata
+            cursor.execute('''
+            SELECT id, name, description, category, created_at, updated_at
+            FROM fuzzing_lists
+            WHERE id = ?
+            ''', (list_id,))
+            
+            row = cursor.fetchone()
+            if not row:
+                conn.close()
+                return None
+                
+            list_id, name, description, category, created_at, updated_at = row
+            
+            # Get payloads
+            cursor.execute('''
+            SELECT payload FROM fuzzing_payloads
+            WHERE list_id = ?
+            ''', (list_id,))
+            
+            payloads = [row[0] for row in cursor.fetchall()]
+            
+            conn.close()
+            
+            return FuzzingList(
+                id=list_id,
+                name=name,
+                description=description,
+                category=category,
+                payloads=payloads,
+                created_at=datetime.fromisoformat(created_at),
+                updated_at=datetime.fromisoformat(updated_at)
+            )
+        except Exception as e:
+            logger.error(f"Error getting fuzzing list: {e}")
+            return None
+    
+    def get_all_lists(self) -> List[Dict[str, Any]]:
+        """Get all fuzzing lists (metadata only)."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute('''
+            SELECT l.id, l.name, l.description, l.category, l.created_at, l.updated_at, COUNT(p.id) as payload_count
+            FROM fuzzing_lists l
+            LEFT JOIN fuzzing_payloads p ON l.id = p.list_id
+            GROUP BY l.id
+            ''')
+            
+            lists = []
+            for row in cursor.fetchall():
+                list_id, name, description, category, created_at, updated_at, payload_count = row
+                lists.append({
+                    "id": list_id,
+                    "name": name,
+                    "description": description,
+                    "category": category,
+                    "payload_count": payload_count,
+                    "created_at": created_at,
+                    "updated_at": updated_at
+                })
+            
+            conn.close()
+            return lists
+        except Exception as e:
+            logger.error(f"Error getting all fuzzing lists: {e}")
+            return []
+    
+    def delete_list(self, list_id: str) -> bool:
+        """Delete a fuzzing list."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            
+            cursor.execute("DELETE FROM fuzzing_lists WHERE id = ?", (list_id,))
+            # Payloads will be deleted automatically due to ON DELETE CASCADE
+            
+            conn.commit()
+            conn.close()
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting fuzzing list: {e}")
+            return False
+    
+    def import_from_file(self, file_path: str, name: Optional[str] = None, category: Optional[str] = None) -> Optional[FuzzingList]:
+        """Import a fuzzing list from a file."""
+        try:
+            fuzzing_list = FuzzingList.from_file(file_path, name, category)
+            if self.save_list(fuzzing_list):
+                return fuzzing_list
+            return None
+        except Exception as e:
+            logger.error(f"Error importing fuzzing list from file: {e}")
+            return None
 
 @dataclass
 class WSFuzzer:
@@ -68,6 +309,7 @@ class WSFuzzer:
     
     is_enabled: bool = False
     config: Dict[str, Any] = field(default_factory=dict)
+    list_manager: FuzzingListManager = field(default_factory=lambda: FuzzingListManager())
     _sql_patterns: List[str] = field(default_factory=lambda: [
         "' OR '1'='1",
         "; DROP TABLE",
@@ -141,6 +383,59 @@ class WSFuzzer:
             
         except Exception as e:
             logger.error(f"Error in fuzz_conversation: {e}")
+            return []
+
+    async def fuzz_with_list(self, conversation: Union[Fuzzable, WSConversation], list_id: str) -> List[WSMessage]:
+        """Fuzz a conversation using a specific fuzzing list.
+        
+        Args:
+            conversation: WebSocket conversation to fuzz
+            list_id: ID of the fuzzing list to use
+            
+        Returns:
+            List of fuzzed messages
+        """
+        if not self.is_enabled:
+            return []
+            
+        fuzzing_list = self.list_manager.get_list(list_id)
+        if not fuzzing_list:
+            logger.error(f"Fuzzing list not found: {list_id}")
+            return []
+            
+        try:
+            conv = conversation if isinstance(conversation, Fuzzable) else Fuzzable.from_conversation(conversation)
+            if not conv.validate():
+                logger.error("Failed to validate conversation for custom list fuzzing")
+                return []
+
+            fuzzed_messages: List[WSMessage] = []
+            for msg in conv.messages:
+                if msg.type != MessageType.TEXT:
+                    continue
+                    
+                for payload in fuzzing_list.payloads:
+                    fuzzed_msg = WSMessage(
+                        id=uuid.uuid4(),
+                        type=msg.type,
+                        data=self._inject_pattern(str(msg.data), payload),
+                        direction=msg.direction,
+                        timestamp=datetime.now(),
+                        metadata={
+                            "fuzzed": True, 
+                            "fuzz_type": "custom", 
+                            "list_id": list_id,
+                            "list_name": fuzzing_list.name,
+                            **msg.metadata
+                        }
+                    )
+                    fuzzed_messages.append(fuzzed_msg)
+            
+            logger.info(f"Generated {len(fuzzed_messages)} fuzzed messages using list '{fuzzing_list.name}'")
+            return fuzzed_messages
+            
+        except Exception as e:
+            logger.error(f"Error in fuzz_with_list: {e}")
             return []
 
     async def fuzz_sql_injection(self, conversation: Union[Fuzzable, WSConversation]) -> List[WSMessage]:

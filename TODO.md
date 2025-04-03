@@ -214,13 +214,13 @@ This document outlines a comprehensive, end-to-end checklist for developing **An
      - ✓ Header-based user management integration
      - ✓ Header-based project selection integration
      - In Progress:
-       - Add ability to edit a request and resend it
-       - Add a fuzzer with the ability to load lists into the fuzzer and store them in the database as separate lists for separate circumstances
+       - ✓ Add ability to edit a request and resend it
+       - ✓ Add a fuzzer with the ability to load lists into the fuzzer and store them in the database as separate lists for separate circumstances
        - Auto-detect url parameters and other things that could be used in the fuzzer.
        - Add packet capture and manipulation to proxy capabilities
        - Add lag simulation to proxy
        - Add AI packet analysis
-       - WebSocket support (websocket.py)
+       - ✓ WebSocket support (websocket.py)
        - Traffic analysis engine (analysis.py)
        - Advanced filtering system
        - Web Crawling Capability

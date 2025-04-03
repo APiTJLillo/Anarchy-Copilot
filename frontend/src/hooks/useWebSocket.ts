@@ -10,6 +10,7 @@ export interface WebSocketOptions {
     reconnectInterval?: number;
     reconnectOnError?: boolean;
     heartbeatInterval?: number;
+    heartbeatTimeout?: number; // Added explicit heartbeat timeout option
     debug?: boolean;
     protocols?: string | string[];
     isInternal?: boolean;
@@ -23,8 +24,17 @@ interface ConnectionState {
 }
 
 const HEARTBEAT_INTERVAL = 15000;
+const DEFAULT_HEARTBEAT_TIMEOUT = 10000; // Default heartbeat timeout
 const DEFAULT_RECONNECT_ATTEMPTS = 5;
 const DEFAULT_RECONNECT_INTERVAL = 3000;
+const MAX_RECONNECT_DELAY = 30000; // Maximum reconnect delay to prevent excessive backoff
+
+// Global reconnection tracking to prevent multiple simultaneous reconnection attempts
+const globalReconnectState = {
+    isReconnecting: false,
+    lastReconnectAttempt: 0,
+    reconnectCount: 0
+};
 
 export function useWebSocket<T = any>(url: string, options: WebSocketOptions = {}) {
     const [readyState, setReadyState] = useState<ReadyState>(ReadyState.UNINSTANTIATED);
@@ -44,21 +54,30 @@ export function useWebSocket<T = any>(url: string, options: WebSocketOptions = {
     const reconnectAttemptsRef = useRef(0);
     const mountedRef = useRef(true);
     const cleanupInProgressRef = useRef(false);
+    const instanceIdRef = useRef<string>(Math.random().toString(36).substring(2, 9)); // Unique instance ID
 
     const debugLog = useCallback((message: string, data?: any) => {
         if (options.debug) {
             if (data) {
-                console.log(`[WebSocket] ${message}`, data);
+                console.log(`[WebSocket:${instanceIdRef.current}] ${message}`, data);
             } else {
-                console.log(`[WebSocket] ${message}`);
+                console.log(`[WebSocket:${instanceIdRef.current}] ${message}`);
             }
         }
     }, [options.debug]);
 
     const cleanup = useCallback(async () => {
         if (cleanupInProgressRef.current) {
-            debugLog('Cleanup already in progress');
-            return;
+            debugLog('Cleanup already in progress, waiting...');
+            // Wait for existing cleanup to complete
+            let attempts = 0;
+            while (cleanupInProgressRef.current && attempts < 10) {
+                await new Promise(resolve => setTimeout(resolve, 100));
+                attempts++;
+            }
+            if (cleanupInProgressRef.current) {
+                debugLog('Cleanup still in progress after waiting, forcing continuation');
+            }
         }
 
         const cleanupPromise = new Promise<void>((resolve) => {
@@ -102,7 +121,11 @@ export function useWebSocket<T = any>(url: string, options: WebSocketOptions = {
                     };
 
                     // Close the socket
-                    socket.close(1000, 'Client cleanup');
+                    try {
+                        socket.close(1000, 'Client cleanup');
+                    } catch (err) {
+                        debugLog('Error closing socket', err);
+                    }
 
                     // Set a timeout in case the close event doesn't fire
                     setTimeout(() => {
@@ -130,15 +153,35 @@ export function useWebSocket<T = any>(url: string, options: WebSocketOptions = {
     }, [debugLog]);
 
     const connect = useCallback(async () => {
+        // Check if global reconnection is in progress
+        const now = Date.now();
+        if (globalReconnectState.isReconnecting) {
+            const timeSinceLastAttempt = now - globalReconnectState.lastReconnectAttempt;
+            if (timeSinceLastAttempt < 1000) {
+                debugLog('Another reconnection is in progress, delaying attempt');
+                await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 1000));
+            }
+        }
+
         await cleanup();
 
-        // Add delay between reconnection attempts
+        // Add delay between reconnection attempts with jitter to prevent thundering herd
         if (reconnectAttemptsRef.current > 0) {
-            const delay = (options.reconnectInterval || DEFAULT_RECONNECT_INTERVAL) * 
-                Math.pow(1.5, reconnectAttemptsRef.current - 1);
+            const baseDelay = options.reconnectInterval || DEFAULT_RECONNECT_INTERVAL;
+            const exponentialDelay = baseDelay * Math.pow(1.5, reconnectAttemptsRef.current - 1);
+            const jitter = Math.random() * 0.3 * exponentialDelay; // Add up to 30% jitter
+            const delay = Math.min(exponentialDelay + jitter, MAX_RECONNECT_DELAY);
+            
+            debugLog(`Delaying reconnection attempt ${reconnectAttemptsRef.current} by ${delay}ms`);
             await new Promise(resolve => setTimeout(resolve, delay));
         }
-        debugLog('Connecting to WebSocket', { url, protocols: options.protocols });
+
+        // Mark global reconnection state
+        globalReconnectState.isReconnecting = true;
+        globalReconnectState.lastReconnectAttempt = Date.now();
+        globalReconnectState.reconnectCount++;
+
+        debugLog('Connecting to WebSocket', { url, protocols: options.protocols, reconnectAttempt: reconnectAttemptsRef.current });
 
         try {
             setConnectionState(prev => ({ ...prev, isConnecting: true, hasError: false }));
@@ -158,12 +201,17 @@ export function useWebSocket<T = any>(url: string, options: WebSocketOptions = {
                     errorMessage: undefined
                 }));
                 reconnectAttemptsRef.current = 0;
+                globalReconnectState.isReconnecting = false;
 
                 if (mountedRef.current) {
                     if (options.onOpen) options.onOpen();
                 }
 
-                // Start heartbeat
+                // Start heartbeat with a more robust implementation
+                if (heartbeatIntervalRef.current) {
+                    clearInterval(heartbeatIntervalRef.current);
+                }
+                
                 heartbeatIntervalRef.current = window.setInterval(() => {
                     if (socket.readyState === WebSocket.OPEN) {
                         try {
@@ -176,6 +224,10 @@ export function useWebSocket<T = any>(url: string, options: WebSocketOptions = {
                             if (heartbeatTimeoutRef.current) {
                                 clearTimeout(heartbeatTimeoutRef.current);
                             }
+                            
+                            // Use configurable timeout with default
+                            const heartbeatTimeoutDuration = options.heartbeatTimeout || DEFAULT_HEARTBEAT_TIMEOUT;
+                            
                             heartbeatTimeoutRef.current = window.setTimeout(() => {
                                 debugLog('Heartbeat timeout, reconnecting');
                                 setConnectionState(prev => ({
@@ -183,9 +235,23 @@ export function useWebSocket<T = any>(url: string, options: WebSocketOptions = {
                                     hasError: true,
                                     errorMessage: 'Heartbeat timeout'
                                 }));
-                                cleanup();
-                                connect();
-                            }, 10000); // 10 second timeout
+                                
+                                // Prevent multiple reconnection attempts from the same heartbeat timeout
+                                if (heartbeatTimeoutRef.current) {
+                                    clearTimeout(heartbeatTimeoutRef.current);
+                                    heartbeatTimeoutRef.current = undefined;
+                                }
+                                
+                                // Only attempt reconnect if not already reconnecting
+                                if (!globalReconnectState.isReconnecting) {
+                                    cleanup().then(() => {
+                                        // Check if still mounted before reconnecting
+                                        if (mountedRef.current) {
+                                            connect();
+                                        }
+                                    });
+                                }
+                            }, heartbeatTimeoutDuration);
                         } catch (err) {
                             debugLog('Error sending heartbeat', err);
                             setConnectionState(prev => ({
@@ -208,23 +274,44 @@ export function useWebSocket<T = any>(url: string, options: WebSocketOptions = {
                     errorMessage: event.code !== 1000 ? `Connection closed: ${event.reason || 'Unknown reason'}` : undefined
                 }));
 
+                // Clear any pending heartbeat timers
+                if (heartbeatIntervalRef.current) {
+                    clearInterval(heartbeatIntervalRef.current);
+                    heartbeatIntervalRef.current = undefined;
+                }
+                
+                if (heartbeatTimeoutRef.current) {
+                    clearTimeout(heartbeatTimeoutRef.current);
+                    heartbeatTimeoutRef.current = undefined;
+                }
+
                 if (mountedRef.current) {
                     if (options.onClose) options.onClose(event);
                 }
 
-                    // Don't reconnect on normal closure or if unmounted
-                    if (event.code !== 1000 && mountedRef.current) {
-                        const shouldReconnect = reconnectAttemptsRef.current < 
-                            (options.reconnectAttempts || DEFAULT_RECONNECT_ATTEMPTS);
-                        if (shouldReconnect) {
-                            debugLog(`Scheduling reconnection (attempt ${reconnectAttemptsRef.current + 1})`);
-                            reconnectAttemptsRef.current++;
-                            connect();
-                        } else {
-                            debugLog('Max reconnection attempts reached');
-                            setError(new Error('Max reconnection attempts reached'));
-                        }
+                // Don't reconnect on normal closure or if unmounted
+                if (event.code !== 1000 && mountedRef.current) {
+                    const maxReconnectAttempts = options.reconnectAttempts || DEFAULT_RECONNECT_ATTEMPTS;
+                    const shouldReconnect = reconnectAttemptsRef.current < maxReconnectAttempts;
+                    
+                    if (shouldReconnect) {
+                        debugLog(`Scheduling reconnection (attempt ${reconnectAttemptsRef.current + 1})`);
+                        reconnectAttemptsRef.current++;
+                        
+                        // Use setTimeout to prevent immediate reconnection
+                        setTimeout(() => {
+                            if (mountedRef.current) {
+                                connect();
+                            }
+                        }, 500);
+                    } else {
+                        debugLog('Max reconnection attempts reached');
+                        setError(new Error('Max reconnection attempts reached'));
+                        globalReconnectState.isReconnecting = false;
                     }
+                } else {
+                    globalReconnectState.isReconnecting = false;
+                }
             };
 
             socket.onerror = (event) => {
@@ -239,9 +326,13 @@ export function useWebSocket<T = any>(url: string, options: WebSocketOptions = {
 
                 if (options.onError) options.onError(event);
 
-                if (options.reconnectOnError) {
-                    cleanup();
-                    connect();
+                // Only reconnect on error if explicitly enabled and not already reconnecting
+                if (options.reconnectOnError && !globalReconnectState.isReconnecting) {
+                    cleanup().then(() => {
+                        if (mountedRef.current) {
+                            connect();
+                        }
+                    });
                 }
             };
 
@@ -255,10 +346,22 @@ export function useWebSocket<T = any>(url: string, options: WebSocketOptions = {
                     }));
 
                     // Handle heartbeat responses
-                    if (data.type === 'heartbeat_response') {
+                    if (data.type === 'heartbeat' || data.type === 'heartbeat_response') {
                         if (heartbeatTimeoutRef.current) {
                             clearTimeout(heartbeatTimeoutRef.current);
                             heartbeatTimeoutRef.current = undefined;
+                        }
+                        
+                        // If it's a heartbeat request (not response), send a response back
+                        if (data.type === 'heartbeat' && !data.response) {
+                            try {
+                                socket.send(JSON.stringify({
+                                    type: 'heartbeat_response',
+                                    timestamp: Date.now()
+                                }));
+                            } catch (err) {
+                                debugLog('Error sending heartbeat response', err);
+                            }
                         }
                         return;
                     }
@@ -287,6 +390,7 @@ export function useWebSocket<T = any>(url: string, options: WebSocketOptions = {
                 errorMessage: errorMessage
             }));
             if (options.onError) options.onError(err as any);
+            globalReconnectState.isReconnecting = false;
         }
     }, [url, options, cleanup, debugLog]);
 
@@ -314,9 +418,15 @@ export function useWebSocket<T = any>(url: string, options: WebSocketOptions = {
 
     const reconnect = useCallback(() => {
         debugLog('Manual reconnection requested');
-        cleanup();
-        reconnectAttemptsRef.current = 0;
-        connect();
+        // Only proceed if not already reconnecting
+        if (!globalReconnectState.isReconnecting) {
+            cleanup().then(() => {
+                reconnectAttemptsRef.current = 0;
+                connect();
+            });
+        } else {
+            debugLog('Reconnection already in progress, request ignored');
+        }
     }, [cleanup, connect, debugLog]);
 
     return {

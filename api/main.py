@@ -10,6 +10,7 @@ from .health import router as health_router
 from .proxy.websocket import router as websocket_router
 from .projects import router as projects_router
 from .users import router as users_router
+from .recon import router as recon_router
 from .proxy.websocket import connection_manager
 
 # Configure logging
@@ -93,6 +94,7 @@ app.include_router(websocket_router, prefix="/api/proxy/ws")  # Mount WebSocket 
 app.include_router(projects_router)  # Projects router already has /api/projects prefix
 app.include_router(users_router, prefix="/api/users")  # Mount users router at /api/users
 app.include_router(health_router, prefix="/api/health", tags=["health"])  # Mount health router at /api/health
+app.include_router(recon_router)  # Recon router already has /api/recon prefix
 
 # Log WebSocket routes
 logger.info("Logging WebSocket routes")

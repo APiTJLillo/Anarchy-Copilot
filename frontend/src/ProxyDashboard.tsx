@@ -21,7 +21,7 @@ import {
 } from '@mui/material';
 import { InterceptorView } from './components/proxy/InterceptorView';
 import ConnectionMonitor from './components/proxy/ConnectionMonitor';
-import { WebSocketView } from './components/proxy/WebSocketView';
+import WebSocketView from './components/proxy/WebSocketView';
 import { RequestModal } from './components/proxy/RequestModal';
 import { ProxyProvider } from './components/proxy/ProxyContext';
 import { UserProvider, useUser } from './contexts/UserContext';

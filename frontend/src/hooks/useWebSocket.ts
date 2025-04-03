@@ -55,6 +55,20 @@ export function useWebSocket<T = any>(url: string, options: WebSocketOptions = {
     const mountedRef = useRef(true);
     const cleanupInProgressRef = useRef(false);
     const instanceIdRef = useRef<string>(Math.random().toString(36).substring(2, 9)); // Unique instance ID
+    
+    // Store message handlers in refs to persist them across reconnections
+    const onMessageHandlerRef = useRef<((data: any) => void) | undefined>(options.onMessage);
+    const onOpenHandlerRef = useRef<(() => void) | undefined>(options.onOpen);
+    const onCloseHandlerRef = useRef<((event: CloseEvent) => void) | undefined>(options.onClose);
+    const onErrorHandlerRef = useRef<((event: Event) => void) | undefined>(options.onError);
+
+    // Update handler refs when options change
+    useEffect(() => {
+        onMessageHandlerRef.current = options.onMessage;
+        onOpenHandlerRef.current = options.onOpen;
+        onCloseHandlerRef.current = options.onClose;
+        onErrorHandlerRef.current = options.onError;
+    }, [options.onMessage, options.onOpen, options.onClose, options.onError]);
 
     const debugLog = useCallback((message: string, data?: any) => {
         if (options.debug) {
@@ -204,7 +218,8 @@ export function useWebSocket<T = any>(url: string, options: WebSocketOptions = {
                 globalReconnectState.isReconnecting = false;
 
                 if (mountedRef.current) {
-                    if (options.onOpen) options.onOpen();
+                    // Use the handler from ref to ensure we have the latest
+                    if (onOpenHandlerRef.current) onOpenHandlerRef.current();
                 }
 
                 // Start heartbeat with a more robust implementation
@@ -286,7 +301,8 @@ export function useWebSocket<T = any>(url: string, options: WebSocketOptions = {
                 }
 
                 if (mountedRef.current) {
-                    if (options.onClose) options.onClose(event);
+                    // Use the handler from ref to ensure we have the latest
+                    if (onCloseHandlerRef.current) onCloseHandlerRef.current(event);
                 }
 
                 // Don't reconnect on normal closure or if unmounted
@@ -324,7 +340,8 @@ export function useWebSocket<T = any>(url: string, options: WebSocketOptions = {
                     errorMessage: errorMessage
                 }));
 
-                if (options.onError) options.onError(event);
+                // Use the handler from ref to ensure we have the latest
+                if (onErrorHandlerRef.current) onErrorHandlerRef.current(event);
 
                 // Only reconnect on error if explicitly enabled and not already reconnecting
                 if (options.reconnectOnError && !globalReconnectState.isReconnecting) {
@@ -367,7 +384,8 @@ export function useWebSocket<T = any>(url: string, options: WebSocketOptions = {
                     }
 
                     setLastMessage(data);
-                    if (options.onMessage) options.onMessage(data);
+                    // Use the handler from ref to ensure we have the latest
+                    if (onMessageHandlerRef.current) onMessageHandlerRef.current(data);
                 } catch (err) {
                     debugLog('Error processing message', err);
                     setConnectionState(prev => ({
@@ -389,10 +407,13 @@ export function useWebSocket<T = any>(url: string, options: WebSocketOptions = {
                 hasError: true,
                 errorMessage: errorMessage
             }));
-            if (options.onError) options.onError(err as any);
+            // Use the handler from ref to ensure we have the latest
+            if (onErrorHandlerRef.current) onErrorHandlerRef.current(err as any);
             globalReconnectState.isReconnecting = false;
         }
-    }, [url, options, cleanup, debugLog]);
+    }, [url, options.reconnectAttempts, options.reconnectInterval, options.reconnectOnError, 
+        options.heartbeatInterval, options.heartbeatTimeout, options.isInternal, options.protocols, 
+        cleanup, debugLog]);
 
     useEffect(() => {
         connect();

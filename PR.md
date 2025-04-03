@@ -1,106 +1,65 @@
-# Proxy Module Implementation
+# Advanced Filtering System with Bypass Mode
 
-This PR adds a comprehensive proxy module to Anarchy Copilot, providing features similar to Burp Suite while integrating with our existing reconnaissance and vulnerability scanning capabilities.
+This PR implements an advanced filtering system with bypass mode and post-analysis filter addition capabilities as requested.
 
 ## Features
 
-### Core Proxy Features
-- HTTP/HTTPS traffic interception
-- Request/response modification
-- Session management and history tracking
-- Certificate authority for HTTPS inspection
-- Configurable scope and filtering
-- Plugin system for custom interceptors
+- **Bypass Mode**: Run without filters and observe traffic without blocking
+- **Post-Analysis Filter Addition**: Add specific traffic to filters after analysis
+- **Flexible Condition Matching**: Create complex filter rules with various operators
+- **Traffic History Recording**: Record all traffic for later analysis
+- **Filter Suggestions**: Get suggested filter rules based on traffic patterns
 
-### Frontend Integration
-- Real-time proxy status monitoring
-- Request/response history viewer
-- Request modification interface
-- Tag and note management
-- Proxy settings configuration
+## Implementation Details
 
-### API Endpoints
-- `GET /api/proxy/status` - Get proxy status and history
-- `POST /api/proxy/start` - Start proxy server
-- `POST /api/proxy/stop` - Stop proxy server
-- `POST /api/proxy/settings` - Update proxy settings
-- `GET /api/proxy/history/{entry_id}` - Get detailed history entry
-- `POST /api/proxy/history/{entry_id}/tags` - Add tags to history entry
-- `POST /api/proxy/history/{entry_id}/notes` - Update entry notes
-- `POST /api/proxy/history/clear` - Clear proxy history
+### Core Backend Components
+- `FilterMode` enum (ACTIVE/BYPASS)
+- `FilterRule` class with flexible condition matching
+- `FilterStorage` class for persisting rules (database and file implementations)
+- `FilterManager` class to centrally manage filtering rules
+- `FilterInterceptor` class that integrates with the proxy system
+
+### Post-Analysis Filter Addition
+- Traffic history recording in the `FilterManager`
+- Methods to create filter rules from traffic history
+- Condition suggestion algorithms based on traffic patterns
+
+### Frontend Components
+- `FilteringModeToggle` component for switching between Active/Bypass modes
+- `TrafficHistoryView` component to display recorded traffic
+- "Add to Filter" button for traffic history items
+- `FilterRuleEditor` with preview capability
+- `FilterSuggestionPanel` to show suggested conditions
+
+### API Integration
+- API endpoints for managing filter rules (CRUD operations)
+- API endpoints for switching filtering modes
+- API endpoints for accessing traffic history
+- API endpoints for creating rules from traffic
+- API endpoints for getting filter suggestions
+
+### Proxy Integration
+- Registration of the `FilterInterceptor` with the proxy system
+- Proper handling of bypass mode
+- Traffic recording for all requests/responses
+
+### Database Schema
+- Added tables for filter rules and settings
 
 ## Testing
+- Unit tests for all components
+- Integration tests for proxy and API integration
+- End-to-end tests for complete workflows
 
-### Manual Testing Steps
+## How to Use
 
-1. Start the development environment:
-```bash
-docker-compose up -d
-```
+1. Use the UI to switch between Active and Bypass modes
+2. In Bypass mode, observe traffic without filtering
+3. Use the "Add to Filter" button to create filter rules from specific traffic
+4. Use the filter suggestions to create rules based on traffic patterns
+5. Edit and preview filter rules before applying them
+6. Switch to Active mode to apply the filters
 
-2. Install the CA certificate:
-```bash
-# The certificate will be generated at ./certs/ca.crt
-# Import this into your browser/system trust store
-```
+## Screenshots
 
-3. Configure your browser to use the proxy:
-- Proxy address: `localhost`
-- Port: `8083`
-
-4. Visit the web interface:
-- Open `http://localhost:3000`
-- Navigate to the Proxy Dashboard
-- Click "Start Proxy"
-
-5. Test basic functionality:
-- Browse some websites and verify traffic appears in history
-- Try adding tags and notes to requests
-- Test request modification
-- Verify HTTPS interception works
-
-### Running Tests
-```bash
-# Install dependencies
-pip install -e ".[dev]"
-pip install -r tests/requirements-proxy-test.txt
-
-# Run proxy-specific tests
-make test-proxy
-
-# Run all tests including proxy
-make test
-```
-
-## Configuration
-
-### Environment Variables
-- `PROXY_HOST`: Proxy server host (default: 127.0.0.1)
-- `PROXY_PORT`: Proxy server port (default: 8083)
-- `CA_CERT_PATH`: Path to CA certificate
-- `CA_KEY_PATH`: Path to CA private key
-
-### Docker Configuration
-The proxy service is configured in `docker-compose.yml` with:
-- Port 8083 exposed for proxy traffic
-- Volume mounts for certificates and history
-- Required environment variables
-
-## Known Limitations
-- WebSocket support is basic and may need enhancement
-- No authentication yet for proxy management endpoints
-- Performance testing needed for high traffic scenarios
-
-## Future Improvements
-- Add authentication for proxy management
-- Enhance WebSocket support
-- Add more built-in security checks
-- Implement request/response pattern matching
-- Add export/import functionality for history
-- Integrate with other scanning tools
-
-## Breaking Changes
-None. This is a new module that doesn't affect existing functionality.
-
-## Related Issues
-Closes #XXX - Add proxy functionality similar to Burp Suite
+(Screenshots would be added here in a real PR)

@@ -1,0 +1,20 @@
+# This file disables all GitHub Actions workflows in the repository
+# To re-enable workflows, delete this file
+
+name: Disable All Workflows
+
+on:
+  # This ensures the workflow is never triggered
+  workflow_dispatch:
+    inputs:
+      disable:
+        description: 'This workflow is disabled'
+        required: true
+        default: 'true'
+
+jobs:
+  disabled:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Workflow Disabled
+        run: echo "All workflows have been disabled via .github/workflows/disable-all.yml"
